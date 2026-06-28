@@ -8,6 +8,7 @@ import '../../../morse/services/morse_transmission_service.dart';
 import '../../../morse/services/timing_sequence_builder.dart';
 import '../../../morse/services/torch_flashlight_controller.dart';
 import '../../../protocol/services/communication_protocol_service.dart';
+import '../../../receive/presentation/screens/receive_screen.dart';
 import '../send_controller.dart';
 import 'send_screen.dart';
 
@@ -59,9 +60,17 @@ class HomeScreen extends StatelessWidget {
                 },
               ),
               const SizedBox(height: 16),
-              const _DisabledPanel(
+              _ActionPanel(
                 title: 'RECEIVE',
-                subtitle: 'Coming Soon',
+                subtitle:
+                    'Point the camera at another phone\'s flashlight to decode.',
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ReceiveSessionScreen(),
+                    ),
+                  );
+                },
               ),
               const Spacer(),
             ],
@@ -171,44 +180,3 @@ class _ActionPanel extends StatelessWidget {
   }
 }
 
-class _DisabledPanel extends StatelessWidget {
-  const _DisabledPanel({
-    required this.title,
-    required this.subtitle,
-  });
-
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: const Color(0xFF262626)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: const Color(0xFFD6D6D6),
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            subtitle,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFF9D9D9D),
-                ),
-          ),
-        ],
-      ),
-    );
-  }
-}

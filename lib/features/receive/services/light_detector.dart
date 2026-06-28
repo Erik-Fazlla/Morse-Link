@@ -70,6 +70,17 @@ class LightDetector {
 
   bool get isOn => _confirmedOn;
 
+  /// Current adaptive decision midpoint, or null before any signal — for
+  /// diagnostics / visualization only.
+  double? get thresholdMid =>
+      (_floor == null || _peak == null) ? null : (_floor! + _peak!) / 2;
+
+  /// Current envelope floor (OFF level) — diagnostics only.
+  double? get floorLevel => _floor;
+
+  /// Current envelope peak (ON level) — diagnostics only.
+  double? get peakLevel => _peak;
+
   /// True when no ON activity has happened for [idleTimeoutMs].
   bool isIdle(int nowMs) =>
       _lastOnMs != null && (nowMs - _lastOnMs!) >= idleTimeoutMs;
