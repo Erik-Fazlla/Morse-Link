@@ -46,7 +46,8 @@ void main() {
     expect(notified, isTrue);
     expect(controller.state.decodedText, 'SOS');
     expect(controller.state.status, ReceiveStatus.stopped);
-    expect(controller.state.quality.decodeConfidencePct, greaterThan(0));
+    // Clean timing → high decode confidence (timing-fit based).
+    expect(controller.state.quality.decodeConfidencePct, greaterThan(80));
 
     final before = ReceiveController.activeControllerCount;
     controller.dispose();

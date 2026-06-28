@@ -43,7 +43,15 @@ class ReceiveController extends ChangeNotifier {
     this.diagnosticsIntervalMs = 80,
     this.historyLength = 180,
   })  : _source = source,
-        _detector = detector ?? LightDetector(),
+        _detector = detector ??
+            LightDetector(
+              // Camera-tuned for range + motion tolerance (see M3 device pass).
+              minRangeForSignal: 16,
+              hysteresisFraction: 0.28,
+              minPulseMs: 50,
+              floorUpRate: 0.008,
+              peakDownRate: 0.008,
+            ),
         _timer = pulseTimer ?? PulseTimer(),
         _sync = synchronizer ??
             TransmissionSynchronizer(
@@ -88,8 +96,8 @@ class ReceiveController extends ChangeNotifier {
   // --- internals ---
   bool _isDisposed = false;
   bool _idleFlushed = false;
-  int _symbolTotal = 0;
-  int _symbolUnknown = 0;
+  double _fitSum = 0;
+  int _fitCount = 0;
   Timer? _diagnosticsTimer;
   int _fpsWindowStartMs = 0;
   int _fpsFrames = 0;
@@ -165,9 +173,8 @@ class ReceiveController extends ChangeNotifier {
       _idleFlushed = false;
       final pulse = _timer.onTransition(transition);
       if (pulse != null) {
+        _accumulateFit(pulse.isOn, pulse.durationMs, _sync.estimatedUnitMs);
         for (final symbol in _sync.process(pulse)) {
-          _symbolTotal++;
-          if (symbol.name == 'unknown') _symbolUnknown++;
           _accumulator.add(symbol);
           produced = true;
         }
@@ -203,10 +210,32 @@ class ReceiveController extends ChangeNotifier {
         detected: _detector.hasSignal,
         estUnitMs: _sync.estimatedUnitMs,
         signalStrengthPct: _detector.signalStrengthPct,
-        decodeConfidencePct: _symbolTotal == 0
-            ? 0
-            : ((1 - _symbolUnknown / _symbolTotal) * 100),
+        decodeConfidencePct: _fitCount == 0 ? 0 : (_fitSum / _fitCount * 100),
       );
+
+  /// Confidence in the decode = how cleanly pulse durations land on the
+  /// expected unit multiples (1/3 for ON, 1/3/7 for OFF). Motion-induced
+  /// timing errors lower this even when every pulse still classifies.
+  void _accumulateFit(bool isOn, int durationMs, int unitMs) {
+    if (unitMs <= 0 || durationMs <= 0) {
+      _fitCount++; // counts as zero fit
+      return;
+    }
+    final u = durationMs / unitMs;
+    final ideals = isOn ? const [1.0, 3.0] : const [1.0, 3.0, 7.0];
+    var nearest = ideals.first;
+    var best = (u - nearest).abs();
+    for (final i in ideals) {
+      final d = (u - i).abs();
+      if (d < best) {
+        best = d;
+        nearest = i;
+      }
+    }
+    final residual = (u - nearest).abs() / nearest;
+    _fitSum += (1 - residual).clamp(0.0, 1.0);
+    _fitCount++;
+  }
 
   void _pushHistory() {
     _history.add(LumSample(
@@ -263,8 +292,8 @@ class ReceiveController extends ChangeNotifier {
     _accumulator.reset();
     _history.clear();
     _idleFlushed = false;
-    _symbolTotal = 0;
-    _symbolUnknown = 0;
+    _fitSum = 0;
+    _fitCount = 0;
     _currentLuminance = 0;
     _currentThreshold = null;
     _isLightOn = false;
