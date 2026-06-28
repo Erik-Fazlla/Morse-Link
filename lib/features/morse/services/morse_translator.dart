@@ -1,60 +1,7 @@
+import '../domain/morse_alphabet.dart';
 import '../domain/morse_translation.dart';
 
 class MorseTranslator {
-  static const Map<String, String> _alphabet = {
-    'A': '.-',
-    'B': '-...',
-    'C': '-.-.',
-    'D': '-..',
-    'E': '.',
-    'F': '..-.',
-    'G': '--.',
-    'H': '....',
-    'I': '..',
-    'J': '.---',
-    'K': '-.-',
-    'L': '.-..',
-    'M': '--',
-    'N': '-.',
-    'O': '---',
-    'P': '.--.',
-    'Q': '--.-',
-    'R': '.-.',
-    'S': '...',
-    'T': '-',
-    'U': '..-',
-    'V': '...-',
-    'W': '.--',
-    'X': '-..-',
-    'Y': '-.--',
-    'Z': '--..',
-    '0': '-----',
-    '1': '.----',
-    '2': '..---',
-    '3': '...--',
-    '4': '....-',
-    '5': '.....',
-    '6': '-....',
-    '7': '--...',
-    '8': '---..',
-    '9': '----.',
-    '.': '.-.-.-',
-    ',': '--..--',
-    '?': '..--..',
-    '!': '-.-.--',
-    '/': '-..-.',
-    '-': '-....-',
-    '(': '-.--.',
-    ')': '-.--.-',
-    ':': '---...',
-    ';': '-.-.-.',
-    '=': '-...-',
-    '+': '.-.-.',
-    '@': '.--.-.',
-    '\'': '.----.',
-    '"': '.-..-.',
-  };
-
   MorseTranslation translate(String input) {
     final normalized = input.trim().toUpperCase();
     if (normalized.isEmpty) {
@@ -73,7 +20,7 @@ class MorseTranslator {
       final letters = <MorseLetter>[];
 
       for (final character in rawWord.split('')) {
-        final symbols = _alphabet[character];
+        final symbols = kMorseAlphabet[character];
         if (symbols == null) {
           unsupported.add(character);
           continue;
