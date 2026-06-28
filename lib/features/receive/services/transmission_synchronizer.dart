@@ -4,63 +4,80 @@ import '../domain/sync_phase.dart';
 import 'pulse_classifier.dart';
 import 'unit_estimator.dart';
 
-/// How a candidate pulse fits the timing model for an estimated unit.
-enum _Fit { clean, boundary, misfit }
-
-/// Conservative synchronization gate. Decoding only begins once there is strong
-/// evidence of a real, regularly-timed transmission — this is what stops the
-/// receiver from emitting random letters when the camera merely moves or sees
-/// ambient light.
+/// Confidence-based synchronization gate. Separates the three concerns:
+/// detection (upstream LightDetector), **synchronization** (this class), and
+/// decoding (downstream classifier/accumulator/decoder).
 ///
-/// Gate (scale-invariant — the unit is estimated from the signal itself):
-/// - SEARCHING ignores OFF pulses; a real transmission starts with light ON.
-/// - While SYNCHRONIZING it buffers pulses and, once the unit is estimable,
-///   requires every recent pulse to quantize cleanly to 1u/3u (ON) or
-///   1u/3u/7u (OFF) within tolerance.
-/// - It LOCKs only after [minOnPulses] ON pulses AND [minConsecutiveFit]
-///   consecutive clean-fitting pulses, then replays the buffer so nothing is
-///   lost.
-/// - Any gross misfit (irregular duration / inconsistent spacing), a long
-///   silence, or buffer overflow resets to SEARCHING.
-/// - When LOCKED, a long end-of-transmission silence flushes and re-gates.
+/// Rather than a brittle all-or-nothing lock that any single mistimed pulse
+/// resets, each pulse contributes a continuous fit score to a running
+/// confidence:
+/// - clean pulses (durations near 1u/3u for ON, 1u/3u/7u for OFF) raise it,
+/// - misfits lower it (penalised harder, to keep false positives near zero),
+/// - it is bounded, so a clean message *banks* confidence and becomes
+///   progressively more tolerant of the occasional glitch (distance / motion).
 ///
-/// Seam for future preamble detection / acknowledgements.
+/// It **soft-locks** when confidence crosses [lockHigh] (with enough ON pulses)
+/// and **retroactively decodes the buffer**, so a single transmission decodes
+/// from its first letter without repetition. It stays locked until confidence
+/// falls below [lockLow] (hysteresis) or an end-of-message silence, then
+/// re-gates. Random light / camera motion never sustains the rising confidence
+/// needed to lock.
 class TransmissionSynchronizer {
   TransmissionSynchronizer({
     required UnitEstimator estimator,
     required PulseClassifier classifier,
-    this.minOnPulses = 4,
-    this.minConsecutiveFit = 6,
+    this.minOnPulses = 3,
+    this.lockHigh = 2.5,
+    this.lockLow = 0.8,
+    this.confidenceCap = 6.0,
+    this.cleanThreshold = 0.5,
+    this.misfitPenalty = 1.5,
+    this.fitTolerance = 0.6,
     this.resetGapUnits = 12,
-    this.maxCandidatePulses = 24,
+    this.maxCandidatePulses = 48,
   })  : _estimator = estimator,
         _classifier = classifier;
 
   final UnitEstimator _estimator;
   final PulseClassifier _classifier;
 
-  /// Minimum number of ON pulses required before a lock is allowed.
+  /// ON pulses required before a lock is allowed.
   final int minOnPulses;
 
-  /// Minimum run of consecutive clean-fitting pulses required to lock.
-  final int minConsecutiveFit;
+  /// Confidence needed to soft-lock.
+  final double lockHigh;
 
-  /// An OFF pulse this many units long (or longer) ends a candidate / message.
+  /// Confidence below which a lock is lost.
+  final double lockLow;
+
+  /// Upper bound on banked confidence.
+  final double confidenceCap;
+
+  /// Fit score at/above which a pulse counts as clean.
+  final double cleanThreshold;
+
+  /// Confidence subtracted for a misfit pulse.
+  final double misfitPenalty;
+
+  /// Relative deviation that drives the fit score to zero.
+  final double fitTolerance;
+
+  /// An OFF pulse this many units long ends a candidate / message.
   final int resetGapUnits;
 
-  /// If the candidate grows past this without locking, it is incoherent noise.
+  /// Safety bound on the candidate buffer.
   final int maxCandidatePulses;
 
   final List<Pulse> _buffer = [];
   SyncPhase _phase = SyncPhase.searching;
+  double _confidence = 0;
 
   SyncPhase get phase => _phase;
   int get estimatedUnitMs => _estimator.estimatedUnitMs;
+  double get confidence => _confidence;
 
   List<PulseSymbol> process(Pulse pulse) {
-    if (_phase == SyncPhase.locked) {
-      return _processLocked(pulse);
-    }
+    if (_phase == SyncPhase.locked) return _processLocked(pulse);
 
     // SEARCHING: ignore OFF — no light yet means no signal to lock onto.
     if (_phase == SyncPhase.searching) {
@@ -68,10 +85,9 @@ class TransmissionSynchronizer {
       _phase = SyncPhase.synchronizing;
     }
 
-    // A long silence while still gating means the candidate (real or noise)
-    // has ended without enough evidence → start over.
-    final unitForGap = _estimator.estimatedUnitMs;
-    if (!pulse.isOn && pulse.durationMs >= resetGapUnits * unitForGap) {
+    // A long silence ends the candidate (real or noise) → start over.
+    if (!pulse.isOn &&
+        pulse.durationMs >= resetGapUnits * _estimator.estimatedUnitMs) {
       _toSearching();
       return const [];
     }
@@ -85,18 +101,19 @@ class TransmissionSynchronizer {
       return const [];
     }
 
-    // Can't judge consistency until the unit is estimable.
+    // Can't score consistency until the unit is estimable.
     if (!_estimator.isStable) return const [];
     final u = _estimator.estimatedUnitMs.toDouble();
 
-    // The newest pulse failing the model is strong evidence of non-Morse
-    // (irregular timing / inconsistent spacing) → reject the candidate.
-    if (_fit(pulse, u) == _Fit.misfit) {
+    _updateConfidence(pulse, u);
+    if (_confidence <= 0) {
+      // Drained by sustained misfits → this candidate is not a transmission.
       _toSearching();
       return const [];
     }
 
-    if (_hasLockEvidence(u)) {
+    final onCount = _buffer.where((p) => p.isOn).length;
+    if (_confidence >= lockHigh && onCount >= minOnPulses) {
       return _lockAndReplay();
     }
     return const [];
@@ -108,40 +125,49 @@ class TransmissionSynchronizer {
     }
     final u = _estimator.estimatedUnitMs;
     final symbol = _classifier.classify(pulse, u);
-    // End of transmission: a long silence flushes the last letter and re-gates
-    // so the next message (or noise) must earn a fresh lock.
+
+    // End of transmission: a long silence flushes the last letter and re-gates.
     if (!pulse.isOn && u > 0 && pulse.durationMs >= resetGapUnits * u) {
+      _toSearching();
+      return [symbol];
+    }
+
+    // Track confidence for unlock hysteresis: sustained inconsistency (lost
+    // signal / heavy motion) drops the lock; isolated glitches do not.
+    _updateConfidence(pulse, u.toDouble());
+    if (_confidence <= lockLow) {
       _toSearching();
     }
     return [symbol];
   }
 
-  /// Lock when there are enough ON pulses and a long enough trailing run of
-  /// clean-fitting pulses.
-  bool _hasLockEvidence(double u) {
-    var run = 0;
-    for (var i = _buffer.length - 1; i >= 0; i--) {
-      if (_fit(_buffer[i], u) != _Fit.clean) break;
-      run++;
+  void _updateConfidence(Pulse pulse, double u) {
+    final f = _fitScore(pulse, u);
+    if (f >= cleanThreshold) {
+      _confidence += f;
+    } else {
+      _confidence -= misfitPenalty;
     }
-    if (run < minConsecutiveFit) return false;
-    final onCount = _buffer.where((p) => p.isOn).length;
-    return onCount >= minOnPulses;
+    _confidence = _confidence.clamp(0.0, confidenceCap);
   }
 
-  _Fit _fit(Pulse p, double u) {
-    if (u <= 0 || p.durationMs <= 0) return _Fit.misfit;
+  /// Continuous fit in [0,1]: 1 = exactly on a valid multiple, 0 = a full
+  /// [fitTolerance] (relative) away or worse.
+  double _fitScore(Pulse p, double u) {
+    if (u <= 0 || p.durationMs <= 0) return 0;
     final r = p.durationMs / u;
-    if (p.isOn) {
-      if (r >= 0.4 && r <= 1.6) return _Fit.clean; // dot
-      if (r >= 2.2 && r <= 4.2) return _Fit.clean; // dash
-      return _Fit.misfit;
+    final ideals = p.isOn ? const [1.0, 3.0] : const [1.0, 3.0, 7.0];
+    var nearest = ideals.first;
+    var best = (r - nearest).abs();
+    for (final m in ideals) {
+      final d = (r - m).abs();
+      if (d < best) {
+        best = d;
+        nearest = m;
+      }
     }
-    if (r >= 0.4 && r <= 1.6) return _Fit.clean; // symbol gap
-    if (r >= 2.2 && r <= 4.2) return _Fit.clean; // letter gap
-    if (r >= 5.0 && r <= 9.0) return _Fit.clean; // word gap
-    if (r > 9.0) return _Fit.boundary; // end-of-message silence
-    return _Fit.misfit; // dead zones between valid multiples
+    final residual = (r - nearest).abs() / nearest;
+    return (1 - residual / fitTolerance).clamp(0.0, 1.0);
   }
 
   List<PulseSymbol> _lockAndReplay() {
@@ -157,6 +183,7 @@ class TransmissionSynchronizer {
   void _toSearching() {
     _phase = SyncPhase.searching;
     _buffer.clear();
+    _confidence = 0;
     _estimator.reset();
   }
 
