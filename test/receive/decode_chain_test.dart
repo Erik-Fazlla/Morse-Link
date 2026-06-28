@@ -64,13 +64,11 @@ void main() {
     expect(decodeAll(pulsesFor('.... . .-.. .-.. ---', 120)), 'HELLO');
   });
 
-  test('single letter E decodes', () {
-    // Single symbols rely on the seed unit (canonical 180ms).
-    expect(decodeAll(pulsesFor('.', 180)), 'E');
-  });
-
-  test('single letter T decodes', () {
-    expect(decodeAll(pulsesFor('-', 180)), 'T');
+  test('single isolated letters are NOT decoded (conservative gate)', () {
+    // A lone pulse is indistinguishable from a motion blip, so the gate never
+    // locks — by design we prefer missing a one-letter signal over garbage.
+    expect(decodeAll(pulsesFor('.', 180)), '');
+    expect(decodeAll(pulsesFor('-', 180)), '');
   });
 
   test('numbers 123 decode', () {
@@ -111,6 +109,24 @@ void main() {
       acc.flush();
     }, returnsNormally);
     expect(MorseDecoder().decode(acc.letters).trim(), '');
+  });
+
+  test('irregular motion-like pulses never produce a decode (idle gate)', () {
+    // Durations that fit no single unit — what camera movement / random lights
+    // produce. The gate must never lock on this.
+    final irregular = <Pulse>[
+      const Pulse(isOn: true, durationMs: 130),
+      const Pulse(isOn: false, durationMs: 220),
+      const Pulse(isOn: true, durationMs: 410),
+      const Pulse(isOn: false, durationMs: 95),
+      const Pulse(isOn: true, durationMs: 250), // ~1.9u — misfit
+      const Pulse(isOn: false, durationMs: 600),
+      const Pulse(isOn: true, durationMs: 175),
+      const Pulse(isOn: false, durationMs: 330),
+      const Pulse(isOn: true, durationMs: 470),
+      const Pulse(isOn: false, durationMs: 140),
+    ];
+    expect(decodeAll(irregular), '');
   });
 
   test('invalid / garbage pulses never crash the pipeline', () {
