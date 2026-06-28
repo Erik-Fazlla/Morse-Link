@@ -1,3 +1,4 @@
+import '../domain/morse_timing.dart';
 import '../domain/morse_translation.dart';
 import '../domain/timing_instruction.dart';
 
@@ -24,7 +25,9 @@ class TimingSequenceBuilder {
           instructions.add(
             TimingInstruction(
               isOn: true,
-              durationMs: symbol == '.' ? unitMs : unitMs * 3,
+              durationMs: symbol == '.'
+                  ? unitMs * MorseTiming.dotUnits
+                  : unitMs * MorseTiming.dashUnits,
               symbol: symbol,
               phaseLabel: 'signal',
             ),
@@ -35,7 +38,7 @@ class TimingSequenceBuilder {
             instructions.add(
               TimingInstruction(
                 isOn: false,
-                durationMs: unitMs,
+                durationMs: unitMs * MorseTiming.symbolGapUnits,
                 symbol: symbol,
                 phaseLabel: 'symbol gap',
               ),
@@ -48,7 +51,7 @@ class TimingSequenceBuilder {
           instructions.add(
             TimingInstruction(
               isOn: false,
-              durationMs: unitMs * 3,
+              durationMs: unitMs * MorseTiming.letterGapUnits,
               symbol: 'gap',
               phaseLabel: 'letter gap',
             ),
@@ -61,7 +64,7 @@ class TimingSequenceBuilder {
         instructions.add(
           TimingInstruction(
             isOn: false,
-            durationMs: unitMs * 7,
+            durationMs: unitMs * MorseTiming.wordGapUnits,
             symbol: '/',
             phaseLabel: 'word gap',
           ),
