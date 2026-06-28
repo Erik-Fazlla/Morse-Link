@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -57,12 +59,19 @@ double brightRegionLuminance(
   return counted == 0 ? 0 : sum / counted;
 }
 
-/// Camera-backed [LightSource]. Initializes a low-resolution rear-camera image
-/// stream with locked exposure/focus and converts each frame into a
-/// [LightReading] using [brightRegionLuminance].
+/// Camera-backed [LightSource]. Streams a low-resolution rear-camera image
+/// feed and converts each frame into a [LightReading] via
+/// [brightRegionLuminance].
 ///
-/// All decode logic stays outside this class; it only emits [LightReading]s.
-/// The [controller] is exposed solely so the screen can render a preview.
+/// Exposure/focus discipline (the source of an earlier cross-session darkening
+/// bug): every session resets the camera to a clean auto state on start, lets
+/// auto-exposure settle, then locks focus + exposure at that converged setting
+/// (no artificial dark bias). On stop the camera is restored to auto and zero
+/// offset BEFORE disposal, so no locked/biased state leaks into the next
+/// session.
+///
+/// The decode pipeline never sees this class — it only emits [LightReading]s.
+/// [controller] is exposed solely so the screen can render a preview.
 class CameraLightSource implements LightSource {
   CameraLightSource({
     this.sampleStride = 4,
@@ -70,24 +79,22 @@ class CameraLightSource implements LightSource {
     this.brightFraction = 0.2,
     this.lockFocus = true,
     this.lockExposure = true,
-    this.exposureBias = 0.7,
+    this.exposureOffset = 0.0,
+    this.settleDuration = const Duration(milliseconds: 500),
   });
 
-  /// Sample every Nth pixel within the centre region. Higher = cheaper.
   final int sampleStride;
-
-  /// Fraction of frame width/height to keep (centred).
   final double centerFraction;
-
-  /// Fraction of sampled pixels (brightest) to average.
   final double brightFraction;
-
   final bool lockFocus;
   final bool lockExposure;
 
-  /// How far toward the minimum exposure offset to bias (0..1) — darker makes
-  /// the flash stand out. Applied before locking exposure.
-  final double exposureBias;
+  /// Extra exposure compensation applied at lock time (0 = lock at the
+  /// converged auto exposure). Kept for tuning; defaults to none.
+  final double exposureOffset;
+
+  /// How long to let auto-exposure/focus settle before locking.
+  final Duration settleDuration;
 
   CameraController? _controller;
   LightSourceError _lastError = LightSourceError.none;
@@ -128,7 +135,9 @@ class CameraLightSource implements LightSource {
       );
       _controller = controller;
       await controller.initialize();
-      await _applyLocks(controller);
+      // Clean slate: undo any locked/biased state a previous session may have
+      // left on the camera device.
+      await _resetToAuto(controller);
 
       await controller.startImageStream((image) {
         if (!_streaming || _processing) return; // drop frames if behind
@@ -153,6 +162,8 @@ class CameraLightSource implements LightSource {
         }
       });
       _streaming = true;
+      // Lock only after AE/AF have settled with real frames flowing.
+      unawaited(_settleThenLock(controller));
       return true;
     } on CameraException catch (e) {
       _lastError = e.code.toLowerCase().contains('permission')
@@ -165,48 +176,53 @@ class CameraLightSource implements LightSource {
     }
   }
 
-  /// Lock focus and exposure so auto-adjustment cannot chase the flashing
-  /// light or background motion. Every call is best-effort — unsupported
-  /// devices simply keep auto behaviour.
-  Future<void> _applyLocks(CameraController controller) async {
+  Future<void> _resetToAuto(CameraController c) async {
+    await _attempt('focus->auto', () => c.setFocusMode(FocusMode.auto));
+    await _attempt('exposure->auto', () => c.setExposureMode(ExposureMode.auto));
+    await _attempt('exposurePoint->null', () => c.setExposurePoint(null));
+    await _attempt('exposureOffset->0', () => c.setExposureOffset(0));
+  }
+
+  Future<void> _settleThenLock(CameraController c) async {
+    await Future<void>.delayed(settleDuration);
+    if (_controller != c || !_streaming) return; // stopped/replaced meanwhile
     if (lockFocus) {
-      try {
-        await controller.setFocusMode(FocusMode.locked);
-      } catch (e) {
-        if (kDebugMode) debugPrint('[CameraLightSource] focus lock: $e');
-      }
+      await _attempt('focus->locked', () => c.setFocusMode(FocusMode.locked));
     }
     if (lockExposure) {
-      try {
-        final minOff = await controller.getMinExposureOffset();
-        final maxOff = await controller.getMaxExposureOffset();
-        final target = (minOff * exposureBias).clamp(minOff, maxOff);
-        await controller.setExposureOffset(target);
-        await controller.setExposureMode(ExposureMode.locked);
-      } catch (e) {
-        if (kDebugMode) debugPrint('[CameraLightSource] exposure lock: $e');
+      if (exposureOffset != 0) {
+        await _attempt(
+            'exposureOffset', () => c.setExposureOffset(exposureOffset));
       }
+      await _attempt(
+          'exposure->locked', () => c.setExposureMode(ExposureMode.locked));
     }
   }
 
   @override
   Future<void> stop() async {
     _streaming = false;
-    final controller = _controller;
+    final c = _controller;
     _controller = null;
-    if (controller == null) return;
+    if (c == null) return;
+
+    await _attempt('stopStream', () async {
+      if (c.value.isStreamingImages) await c.stopImageStream();
+    });
+    // Restore a clean auto state BEFORE disposal so nothing carries over.
+    await _attempt('exposure->auto', () => c.setExposureMode(ExposureMode.auto));
+    await _attempt('exposureOffset->0', () => c.setExposureOffset(0));
+    await _attempt('focus->auto', () => c.setFocusMode(FocusMode.auto));
+    await _attempt('dispose', () => c.dispose());
+  }
+
+  /// Best-effort camera operation: failures (unsupported on some devices) are
+  /// logged but never surfaced as a source error.
+  Future<void> _attempt(String what, Future<void> Function() op) async {
     try {
-      if (controller.value.isStreamingImages) {
-        await controller.stopImageStream();
-      }
+      await op();
     } catch (e) {
-      _lastError = LightSourceError.interrupted;
-      if (kDebugMode) debugPrint('[CameraLightSource] stopImageStream: $e');
-    }
-    try {
-      await controller.dispose();
-    } catch (e) {
-      if (kDebugMode) debugPrint('[CameraLightSource] dispose: $e');
+      if (kDebugMode) debugPrint('[CameraLightSource] $what failed: $e');
     }
   }
 }
