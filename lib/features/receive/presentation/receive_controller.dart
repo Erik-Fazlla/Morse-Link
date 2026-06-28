@@ -112,7 +112,9 @@ class ReceiveController extends ChangeNotifier {
     ));
 
     final ok = await _source.start(_onReading);
-    if (_isDisposed) {
+    // Disposed or stopped while the camera was initializing — release and bail
+    // so we never re-enter the receiving state behind the user's back.
+    if (_isDisposed || _state.status == ReceiveStatus.stopped) {
       await _source.stop();
       return;
     }
@@ -127,15 +129,18 @@ class ReceiveController extends ChangeNotifier {
 
   Future<void> stopReceiving() async {
     if (_isDisposed) return;
+    // Stop processing and return the UI to a non-receiving state immediately,
+    // BEFORE releasing the camera — a slow camera teardown must never freeze
+    // the Stop button.
     _stopDiagnosticsClock();
-    await _source.stop();
-    if (_isDisposed) return;
     _accumulator.flush();
     _setState(_state.copyWith(
       status: ReceiveStatus.stopped,
       decodedText: _decoder.decode(_accumulator.letters).trim(),
       syncPhase: _sync.phase,
     ));
+    // Release camera resources in the background; never throws.
+    await _source.stop();
   }
 
   /// Release the camera when the app goes to the background.
@@ -181,8 +186,7 @@ class ReceiveController extends ChangeNotifier {
     _fpsFrames++;
 
     if (produced) {
-      _refreshDecode();
-      _notifySafely();
+      _refreshDecode(); // _setState notifies
     }
   }
 
@@ -245,7 +249,6 @@ class ReceiveController extends ChangeNotifier {
       }
     }
     _setState(_state.copyWith(quality: _currentQuality()));
-    _notifySafely();
   }
 
   void _stopDiagnosticsClock() {
@@ -293,10 +296,6 @@ class ReceiveController extends ChangeNotifier {
   void _setState(ReceiveState next) {
     if (_isDisposed) return;
     _state = next;
-  }
-
-  void _notifySafely() {
-    if (_isDisposed) return;
     notifyListeners();
   }
 

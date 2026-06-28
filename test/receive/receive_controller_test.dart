@@ -53,6 +53,28 @@ void main() {
     expect(ReceiveController.activeControllerCount, before - 1);
   });
 
+  test('stopReceiving notifies listeners and returns to a non-receiving state',
+      () async {
+    final controller = ReceiveController(source: FakeLightSource(_sosReadings()));
+    await controller.startReceiving();
+
+    // Reset the notification flag, then stop and require a rebuild signal.
+    var notifiedAfterStart = false;
+    controller.addListener(() => notifiedAfterStart = true);
+    await controller.stopReceiving();
+
+    expect(notifiedAfterStart, isTrue,
+        reason: 'Stop must notify so the UI leaves the receiving state');
+    expect(controller.state.isReceiving, isFalse);
+    expect(controller.state.status, ReceiveStatus.stopped);
+
+    // Start must be usable again afterwards.
+    await controller.startReceiving();
+    expect(controller.state.status, anyOf(ReceiveStatus.receiving, ReceiveStatus.stopped));
+    await controller.stopReceiving();
+    controller.dispose();
+  });
+
   test('maps permission denied to an error state', () async {
     final controller = ReceiveController(
       source: FakeLightSource(const [], failWith: LightSourceError.permissionDenied),
