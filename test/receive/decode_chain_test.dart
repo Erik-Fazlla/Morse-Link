@@ -82,19 +82,12 @@ void main() {
 
   test('timing tolerance: jittered SOS still decodes', () {
     final base = pulsesFor('... --- ...', 100);
-    // Independent per-pulse jitter of +/-15% (deterministic LCG) — realistic
-    // measurement noise, not an ON/OFF-systematic bias.
-    var seed = 12345;
-    double rnd() {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return (seed % 1000) / 1000.0;
-    }
-
     final jittered = [
-      for (final p in base)
+      for (var i = 0; i < base.length; i++)
         Pulse(
-          isOn: p.isOn,
-          durationMs: (p.durationMs * (0.85 + 0.30 * rnd())).round(),
+          isOn: base[i].isOn,
+          // even index = ON (shorter), odd = OFF (longer): +/-12% wobble.
+          durationMs: (base[i].durationMs * (i.isEven ? 0.88 : 1.12)).round(),
         ),
     ];
     expect(decodeAll(jittered), 'SOS');

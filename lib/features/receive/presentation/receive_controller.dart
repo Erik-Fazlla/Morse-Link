@@ -91,7 +91,6 @@ class ReceiveController extends ChangeNotifier {
   bool get isLightOn => _isLightOn;
   double get fps => _fps;
   double get avgLatencyMs => _avgLatencyMs;
-  double get syncConfidence => _sync.confidence;
   List<LumSample> get history => List.unmodifiable(_history);
 
   // --- internals ---

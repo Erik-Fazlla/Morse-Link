@@ -429,7 +429,6 @@ class _DiagnosticsOverlay extends StatelessWidget {
     final q = state.quality;
     final rows = <(String, String)>[
       ('Sync phase', state.syncPhase.name),
-      ('Sync conf.', controller.syncConfidence.toStringAsFixed(2)),
       ('Luminance', controller.currentLuminance.toStringAsFixed(1)),
       ('Threshold', controller.currentThreshold?.toStringAsFixed(1) ?? '—'),
       ('Light', controller.isLightOn ? 'ON' : 'OFF'),
