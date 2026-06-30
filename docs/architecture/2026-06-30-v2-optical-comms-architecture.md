@@ -1,11 +1,17 @@
 # Version 2 — Offline Long-Range Optical Communication System
 
-**Status:** Architecture draft for review. No implementation.
+**Status:** APPROVED. **Living design document** — update when research or real-world testing changes assumptions.
 **Date:** 2026-06-30
-**Supersedes (scope):** the Morse-only product framing. V1 is frozen as proof-of-concept baseline (bug fixes only).
-**Source study:** the V2 research study (physics, OCC/VLC, CV, protocol analysis).
+**Supersedes (scope):** the Morse-only product framing. **V1 (Morse) is officially frozen as proof-of-concept — critical bug fixes only.**
+**Source study:** the V2 research study + physical-layer study (`2026-06-30-physical-layer-study.md`).
 
 > Design goal: the best architecture for the next ~5 years. Every subsystem must be **independently replaceable**. The document therefore specifies **interfaces (contracts) between layers**, not just boxes.
+
+### Hard product constraint (decision of record)
+**V2 is designed around two completely unmodified smartphones, with zero hardware budget.**
+- The core architecture must **not** depend on any accessory (telephoto lens, collimator, tripod, external LED, optical filter).
+- **Baseline promise:** *two ordinary smartphones communicate offline using only their built-in flashlight and camera.* Every subsystem optimizes for this baseline.
+- Accessories appear **only** as optional future extensions (§11) and must never become required or influence core design. The PHY stays accessory-agnostic so optics, if ever added, plug into the same stack without changing it.
 
 ---
 
@@ -14,7 +20,7 @@
 An **offline, light-only communication system** between two smartphones — no cellular, Wi-Fi, Bluetooth, or internet. One phone's light source transmits; another phone's camera receives and decodes.
 
 - **Primary use:** reliable short-message communication for emergencies and off-grid scenarios.
-- **Range goal:** tens of meters handheld at night today; **hundreds of meters** with accessories (collimator + tripod), as physics allows. Daylight is a gated stretch goal.
+- **Range goal:** maximize the **bare-phone** reliable range at night (target tens → 150 m+ handheld) entirely through software — weak-signal vision + robust protocol/FEC. Daylight is best-effort, not promised. Hundreds-of-meters via optics is a *future optional* extension, never a core dependency.
 - **Reliability over rate:** correctness and graceful degradation beat throughput. A message that arrives slowly but intact wins.
 - **Human-survivable fallback:** a person must still be able to read an SOS by eye if software fails — Morse remains as a fallback mode, not the core.
 - **Hardware-aware:** the product treats optics/mounts as part of the system, with an aiming UI and accessory support.
@@ -222,9 +228,11 @@ Fragmentation/reassembly lives in Transport; a message = ordered frames keyed by
 
 ---
 
-## 11. Future Hardware Support
+## 11. Future Hardware Support (OPTIONAL — never core)
 
-An **Accessory/Capability abstraction** so hardware extends the system without code forks.
+> **Constraint reminder:** the core targets two unmodified phones with zero hardware budget. Everything in this section is an **optional future extension**. None of it may become required or shape core interfaces. The capability abstraction below exists so that *if* accessories are ever added they slot into the unchanged PHY — the bare-phone path must remain fully functional and primary at all times.
+
+An **Accessory/Capability abstraction** so hardware *could* extend the system later without code forks.
 
 - **Capability flags** on each side: `{ collimated, telephoto, externalEmitter, narrowbandFilter, mountStabilized, maxOpticalPower }`. Negotiated/known per device; influence default profile, integration time, and aiming UI.
 - **Aiming UI** (software, hardware-enabling): on-screen reticle + live signal/SNR meter + spot-lock indicator → makes long-range pointing feasible.
