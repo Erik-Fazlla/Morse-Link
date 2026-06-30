@@ -56,4 +56,40 @@ void main() {
   test('empty plane → 0, never throws', () {
     expect(brightRegionLuminance(Uint8List(0), 0, 0, 0), 0);
   });
+
+  group('brightCentroid', () {
+    test('locates a central blob near the centre', () {
+      final y = _frame(w, h, 12);
+      _block(y, w, 16, 16, 8, 8, 255);
+      final c = brightCentroid(y, w, h, w, stride: 1)!;
+      expect(c.x, closeTo(0.5, 0.08));
+      expect(c.y, closeTo(0.5, 0.08));
+    });
+
+    test('locates an off-centre blob', () {
+      final y = _frame(w, h, 12);
+      _block(y, w, 30, 8, 6, 6, 255); // upper-right
+      final c = brightCentroid(y, w, h, w, stride: 1)!;
+      expect(c.x, closeTo(0.82, 0.1));
+      expect(c.y, closeTo(0.27, 0.1));
+    });
+
+    test('returns null on a dark/uniform frame (no spot)', () {
+      expect(brightCentroid(_frame(w, h, 14), w, h, w, stride: 1), isNull);
+    });
+  });
+
+  test('windowed sampling follows the blob off-centre (tracking benefit)', () {
+    final y = _frame(w, h, 12);
+    _block(y, w, 30, 8, 6, 6, 255); // upper-right blob
+
+    // Window centred on the tracked blob captures it.
+    final tracked = brightRegionLuminance(y, w, h, w,
+        stride: 1, centerX: 0.82, centerY: 0.27);
+    // Fixed centre window misses it.
+    final fixedCentre = brightRegionLuminance(y, w, h, w, stride: 1);
+
+    expect(tracked, greaterThan(60));
+    expect(fixedCentre, lessThan(25));
+  });
 }
