@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../history/services/transmission_history_repository.dart';
@@ -9,6 +10,7 @@ import '../../../morse/services/timing_sequence_builder.dart';
 import '../../../morse/services/torch_flashlight_controller.dart';
 import '../../../protocol/services/communication_protocol_service.dart';
 import '../../../receive/presentation/screens/receive_screen.dart';
+import '../../../../v2/lab/v2_lab_screen.dart';
 import '../send_controller.dart';
 import 'send_screen.dart';
 
@@ -72,6 +74,18 @@ class HomeScreen extends StatelessWidget {
                   );
                 },
               ),
+              if (kDebugMode)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                          builder: (_) => const V2LabScreen()),
+                    ),
+                    icon: const Icon(Icons.science_outlined),
+                    label: const Text('V2 Lab (debug)'),
+                  ),
+                ),
               const Spacer(),
             ],
           ),
