@@ -1,9 +1,10 @@
 # V2 Vision Engine — Design
 
-**Status:** APPROVED-pending-review. **Living design document.**
-**Date:** 2026-06-30
+**Status:** **ARCHITECTURE FROZEN** — see §Architecture Freeze. Still a **living document**: content may be revised, but only per the freeze policy.
+**Date:** 2026-06-30 (frozen at this revision — Build/Adapt/Reuse study incorporated)
 **Scope:** Vision Engine ONLY. Ignores protocol, FEC, framing, UI, Morse.
 **Constraint:** two unmodified smartphones, zero hardware budget. Standard camera only.
+**Design philosophy:** every module is explicitly classified **BUILD**, **ADAPT**, or **REUSE** — see §Build / Adapt / Reuse Summary. We reuse proven *algorithms* (astronomy, robotics/MOT) by porting their logic into Dart; we do **not** adopt general-purpose CV *runtimes* (OpenCV, MediaPipe, ARCore) as dependencies — see §Technology Decisions for why.
 
 ## Objective
 
@@ -42,6 +43,22 @@ Plus **arbitration** (which source is "ours") and **motion compensation** (separ
 | Classic CV | Optical flow / feature registration | *Optional* global-motion fallback when no usable IMU | High (costly) |
 
 **Deliberately avoided:** full-frame AI/CNN detection (heavy, wrong tool for a structureless point), full-frame optical flow as the primary motion strategy (CPU-expensive — IMU fusion is cheaper and more robust). These stay as last-resort fallbacks, not the core.
+
+---
+
+## Technology Decisions
+
+Formal record of the Build/Adapt/Reuse research study's conclusions on candidate runtimes/libraries. **We reuse algorithmic knowledge, not foreign runtimes** — the distinction that drives every decision below.
+
+| Technology | Verdict | Why |
+|---|---|---|
+| **OpenCV** (core + contrib, via `opencv_dart`/`opencv_4`) | **Rejected as core dependency** | Built for general multi-object scenes; we track one blob. Flutter integration is FFI-bridged (community-maintained, not first-party): per-frame marshalling of the Y-plane across the FFI boundary plus native call overhead is a direct tax on low-end-phone CPU budget, and the binary adds ~20–40 MB. No capability gap it fills that ADAPT doesn't already close more cheaply. Retained only as a possible future fallback for a rarely-invoked optical-flow path if E2 shows IMU is unusable. |
+| **MediaPipe** | **Rejected** | Built for face/hand/pose landmark detection — wrong problem domain entirely (not a faint-point-source detector). Heavy runtime for zero relevant capability. |
+| **ARCore** | **Rejected as the primary motion solution** | Gives full 6DOF fused pose — far more than the 2D image-plane shift prediction we actually need. Requires ARCore-**certified** devices and Google Play Services, which directly conflicts with the "two completely unmodified smartphones, works everywhere" baseline promise — a device-coverage risk, not just a weight/cost one. Documented as a future-optional only, never a core dependency. |
+| **`sensors_plus`** (pub.dev) | **Selected — REUSE** for raw IMU access | Thin, mature, actively maintained Flutter plugin wrapping platform gyro/accel APIs. No algorithmic opinion — exactly the right shape to depend on. The *fusion* math (integrate angular velocity → predicted image-plane shift) remains BUILD, on top of this. |
+| **`camera`** (pub.dev) | **Retained — REUSE** as the acquisition layer | Already proven in V1 (image stream, YUV420, Y-plane access), mature, actively maintained. No alternative considered offers a capability we're missing; replacing it would be reinvention for no benefit. |
+
+**Net effect:** zero general-purpose CV runtimes enter the dependency tree. The only new runtime dependency introduced by this study is `sensors_plus` (thin sensor access, not an algorithm).
 
 ---
 
@@ -125,6 +142,17 @@ Plus **arbitration** (which source is "ours") and **motion compensation** (separ
 
 ---
 
+## Algorithm Lineage (named techniques we ADAPT)
+
+These modules port a specific, published algorithm's logic into Dart — we depend on the *technique*, never on the originating library/runtime (those are Python/C-native and unusable in Flutter without heavy FFI bridging; see §Technology Decisions).
+
+- **Module 2 — Background & Noise Model:** ports **sigma-clipped local background + noise (σ) estimation**, the technique underlying astronomy source-extraction tools (SExtractor/`photutils`-style). Iterative sigma-clip mean/median over a local region, reimplemented directly on the Y-plane.
+- **Module 3 — Candidate Detection:** ports **matched-filter / SNR-threshold detection** (peak ≥ k·σ above the local background) — the same astronomy weak-point-source technique, generalizing V1's proven bright-region approach into a formal σ-domain.
+- **Module 7 — Sub-pixel Localization:** ports **intensity-weighted centroid / Gaussian-PSF fit**, the standard astrometry technique for precise sub-pixel source position and low-noise intensity from a point-spread function.
+- **Module 5 — Tracker:** architecturally inspired by **SORT** (Simple Online Realtime Tracking — the standard reference algorithm from robotics/MOT literature: Kalman-based prediction, gated data association, and a tentative→confirmed→coasting→lost track-lifecycle state machine). We implement a **lightweight, Dart-native, single/few-target simplification** of SORT's design — porting its lifecycle and gating *logic*, not depending on the original Python/numpy implementation, and dropping SORT's Hungarian-assignment machinery (unnecessary when tracking one source).
+
+---
+
 ## Output contract (protocol-agnostic — the whole point)
 
 ```
@@ -192,6 +220,39 @@ Defer matched filter, temporal stacking, optical-flow fallback, full self-calibr
 
 ---
 
+## Build / Adapt / Reuse Summary
+
+So a future contributor can see at a glance which parts intentionally lean on established algorithms/packages and which are project-specific:
+
+| # | Module | Classification | Basis |
+|---|---|---|---|
+| 0 | Calibration | **BUILD** | project-specific (per-device σ/fps/exposure self-tuning) |
+| 1 | Acquisition & Conditioning | **REUSE** (`camera` plugin) + BUILD (abstraction) | mature Flutter plugin; thin wrapper is bespoke |
+| 2 | Background & Noise Model | **ADAPT** | sigma-clipped background (astronomy source-extraction) |
+| 3 | Candidate Detection | **ADAPT** | matched-filter/SNR detection (astronomy); classic-CV fallback |
+| 4 | Motion Compensation | **BUILD** (primary) | IMU-predicted shift; vision-only fallback deferred |
+| 5 | Tracker | **ADAPT** | SORT-inspired Kalman + gating + track lifecycle, Dart-native |
+| 6 | Source Arbitration | **BUILD** | project-specific; informed by beacon/lighthouse blink-coherence ID |
+| 7 | Sub-pixel Localization | **ADAPT** | intensity-weighted centroid / Gaussian-PSF fit (astrometry) |
+| 8 | Temporal Integration | **BUILD** | project-specific; informed by astronomy frame-stacking |
+| 9 | Output/Telemetry | **BUILD** | project-specific (protocol-agnostic `Track` contract) |
+| — | IMU access | **REUSE** (`sensors_plus`) | thin, mature platform sensor plugin |
+
+**Zero core CV/algorithm runtimes (OpenCV, MediaPipe, ARCore) are adopted as dependencies** — see §Technology Decisions. REUSE is reserved for thin platform-access packages; ADAPT is reserved for precisely-ported published algorithms; BUILD covers everything genuinely bespoke to this pipeline's signal model.
+
+---
+
+## Architecture Freeze
+
+As of this revision, the **Vision Engine module boundaries (§Module architecture, the nine numbered modules, and the `Track` output contract) are considered stable.**
+
+- **What is frozen:** the module decomposition, their responsibilities, the interfaces between them, and the `Track` contract. These will not be redesigned as a matter of routine.
+- **What is not frozen:** implementation details, tuning parameters (σ thresholds, kernel sizes, EMA rates), and the §Open questions below — these are exactly what E1–E4 and subsequent implementation milestones exist to resolve.
+- **What happens next:** work shifts from architecture/research to **implementation and validation through experiments** (E1, E2, then the Vision Engine MVP), per the V2 roadmap's milestone governance.
+- **When this may change:** only if **experimental evidence directly contradicts the current design** (e.g. E1 shows frame timing unusable for the assumed approach, or E2 shows IMU fusion doesn't hold on real devices) — never as a preference or a "cleaner idea" absent such evidence. Per the roadmap's standing rule: if evidence contradicts the architecture, the architecture is updated first, before implementation is forced to match a wrong assumption.
+
+---
+
 ## Open questions (for review)
 
 1. **Sensor timestamps:** are per-frame hardware timestamps reliably available across target Android devices (needed for clean timing)? If not, characterize `DateTime.now()` jitter.
@@ -205,4 +266,4 @@ Defer matched filter, temporal stacking, optical-flow fallback, full self-calibr
 
 ## Recommendation
 
-Adopt the nine-module Vision Engine with the **SNR-domain + IMU-fusion + Kalman-MOT + coherence-arbitration** core, reusing astronomy and robotics algorithms wholesale. Build the **MVP subset first** (wrapping V1's tracker behind the new interfaces), then add matched filtering and temporal integration as range-focused increments. The `Track` output contract is fixed from day one so every later protocol — and every later optional accessory — plugs in without changing this engine.
+Adopt the nine-module Vision Engine with the **SNR-domain + IMU-fusion + Kalman-MOT + coherence-arbitration** core — the astronomy/robotics *techniques* ADAPTed into Dart per §Algorithm Lineage, with platform access (camera, IMU) REUSEd and everything signal-model-specific BUILT, per §Build / Adapt / Reuse Summary. Build the **MVP subset first** (wrapping V1's tracker behind the new interfaces), then add matched filtering and temporal integration as range-focused increments. The `Track` output contract is fixed from day one so every later protocol — and every later optional accessory — plugs in without changing this engine. This architecture is now **frozen** (§Architecture Freeze); the project moves to implementation and experiment-driven validation.
