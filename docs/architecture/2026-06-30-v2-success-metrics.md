@@ -22,7 +22,7 @@
 - `C-DAY-SHADE` — daytime open shade (best-effort only; not a promised regime).
 
 **Reference transmitter**
-- Emitter = phone torch. Timing unit `U-STD` is **deferred to E1** (E1 measures the achievable timing floor). Until then use **120 ms as an interim placeholder only**. Same message, same unit across compared runs.
+- Emitter = phone torch. Timing unit `U-STD` **recommended ≈300 ms** per E1 Phone A findings (see §E1 Findings below) — **interim, pending Phone B**; supersedes the earlier 120 ms placeholder. Same message, same unit across compared runs.
 
 **Reference receiver postures**
 - `P-BRACED` — phone steadied against a fixed object (baseline, motion ≈ 0).
@@ -41,6 +41,25 @@
 - Motion: on-device gyro log (°/s).
 
 **Global pass rule (interim):** a metric passes if it meets its criterion on the project's **existing test phones**. Multi-tier device coverage (≥3 devices) is a **deferred** target, not an interim gate.
+
+---
+
+## E1 Findings (Interim — Phone A only, Phone B pending)
+
+Raw measurements (V2 Lab → Frame timing probe, wall-clock only):
+
+| FPS | Mean interval | Jitter σ | Max interval | p90 | Est. dropped gaps | Proc. latency avg | Proc. latency max |
+|---|---|---|---|---|---|---|---|
+| 23.16 | 41.4 ms | 19.6 ms | 194 ms | 61 ms | 31 | 0.11 ms | 2.79 ms |
+
+**Analysis:**
+- Processing latency (≤2.79 ms) is negligible next to jitter (σ 19.6 ms, gaps to 194 ms) — the dominant timing error is camera-pipeline frame delivery, not our code. **Wall-clock timestamps remain acceptable** on this basis; a hardware/sensor timestamp isn't exposed by the `camera` plugin's stream API and isn't worth native platform-channel work at this stage. Open Question #1 in the Vision Engine doc stays open but deprioritized.
+- Gap rate ≈2.2% of intervals (~1 stall per ~2 s, assuming a ~60 s run) — frequent enough to be a real design input. Reinforces (does not change) the roadmap's Phase 4 FEC priority; also means Module 8 (Temporal Integration) must be gap-aware when implemented (implementation detail, not a structural change).
+- **No Vision Engine structural change required** — module boundaries and the `Track` contract are unaffected; this data calibrates parameters the Architecture Freeze doc explicitly left open.
+- **U-STD recommendation:** ≈**300 ms** (raw pulse-width floor), derived from 4–5×p90 (244–305 ms) and 1.5–2×max-gap margin (291–388 ms). Supersedes the 120 ms placeholder. Exact bit-period/encoding allocation is an MP1 (PHY) decision built on this floor.
+- **Metric #10 (Min FPS):** measured 23.16 fps vs the ≥24 fps provisional target — essentially at target; treated as E1 supplying the real number rather than a failed gate. Final target locks after Phone B.
+
+**E1 status: IN PROGRESS.** Roadmap requires ≥2 devices before E1 formally closes and E2 begins (see roadmap E1 entry). Phone B (and any other available test phones) still needed.
 
 ---
 
@@ -145,7 +164,7 @@
 | 7 | Latency | ~seconds (unlogged) | ≤ on-air + ≤1 s (≤5 s M-MED) | send→display ts | within target |
 | 8 | CPU | not instrumented | ≤25% mean D-MID | profiler/top | ≤25%, no jank |
 | 9 | Battery | not instrumented | RX ≤10%/hr D-MID | batterystats | ≤10%/hr RX |
-| 10 | Min FPS | ~30 (unmeasured) | ≥24 sustained D-MID (E1 sets) | in-app counter | ≥ target sustained |
+| 10 | Min FPS | ~30 (unmeasured) | ~23.16 measured Phone A (interim, pending Phone B) | in-app counter | ≥ target sustained |
 | 11 | Thermal | not instrumented | no throttle over 10min RX / 5min TX | thermalservice + fps | no throttle collapse |
 | 12 | Device coverage | dev device(s) | ≥3 devices, ≥1/tier | per-device suite | ≥3 pass metrics 1–6 |
 
@@ -156,3 +175,7 @@
 - **Reference devices = the project's existing test phones.** Multi-tier (≥3) coverage deferred, not an interim gate.
 - **`U-STD` deferred to E1** (120 ms interim placeholder only).
 - **Daylight (`C-DAY-SHADE`) is best-effort only — NOT a V2 pass criterion.**
+
+## E1 architecture review — Phone A (interim)
+- FPS/jitter/U-STD figures recorded above (§E1 Findings). No Vision Engine structural change. Wall-clock timestamps confirmed acceptable. `U-STD` revised 120 ms → **~300 ms** (interim).
+- **E1 not yet closed** — roadmap requires ≥2 devices; Phone B pending before E2 begins.

@@ -255,7 +255,7 @@ As of this revision, the **Vision Engine module boundaries (§Module architectur
 
 ## Open questions (for review)
 
-1. **Sensor timestamps:** are per-frame hardware timestamps reliably available across target Android devices (needed for clean timing)? If not, characterize `DateTime.now()` jitter.
+1. **Sensor timestamps:** are per-frame hardware timestamps reliably available across target Android devices (needed for clean timing)? If not, characterize `DateTime.now()` jitter. — **E1 Phone A (interim):** no hardware timestamp exposed by the `camera` plugin's stream API; measured wall-clock jitter σ=19.6 ms, p90=61 ms, max=194 ms, with negligible processing overhead (≤2.79 ms) — confirms the jitter is camera-pipeline delivery, not our code. **Wall-clock accepted as sufficient for now**; deprioritized pending evidence it's actually insufficient. Pending Phone B before closing.
 2. **IMU/camera time-sync:** offset and rate alignment between gyro and frames — measure per device.
 3. **Matched-filter PSF:** fixed kernel vs adaptive to measured spot size/defocus.
 4. **Mains-flicker rejection:** confirm 50/60 Hz ambient is reliably separable from comm modulation at our frame rates (aliasing risk).
