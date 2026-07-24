@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'experiments/e1_timing_probe.dart';
+import 'experiments/e2_imu_sync_probe.dart';
 
 /// V2 Lab — debug-only host for the risk-reduction experiments (E1–E4) and,
 /// later, V2 subsystem test harnesses. Reachable only from a debug build.
@@ -17,10 +18,11 @@ class V2LabScreen extends StatelessWidget {
         subtitle: 'Interval jitter, delivered FPS, processing latency',
         builder: (_) => const E1TimingProbeScreen(),
       ),
-      const _LabEntry(
+      _LabEntry(
         id: 'E2',
         title: 'Gyro ↔ camera sync',
-        subtitle: 'Pending (after E1 review)',
+        subtitle: 'IMU-predicted vs observed shift correlation',
+        builder: (_) => const E2ImuSyncProbeScreen(),
       ),
       const _LabEntry(
         id: 'E3',
