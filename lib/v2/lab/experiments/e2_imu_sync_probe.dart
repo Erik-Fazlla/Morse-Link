@@ -65,6 +65,8 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
   int _gyroCount = 0;
   int _startMs = 0;
   double _meanGyroFrameOffsetMs = 0;
+  String? _gyroWarning;
+  Timer? _gyroWatchdog;
 
   // Paired samples for correlation: predicted (from gx/gy) vs actual shift.
   final List<double> _gx = [];
@@ -90,13 +92,17 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _uiTimer?.cancel();
+    _gyroWatchdog?.cancel();
     _gyroSub?.cancel();
     _controller?.dispose();
     super.dispose();
   }
 
   Future<void> _start() async {
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+      _gyroWarning = null;
+    });
     try {
       final granted = (await Permission.camera.request()).isGranted;
       if (!granted) {
@@ -122,11 +128,44 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
       await controller.initialize();
 
       _reset();
-      await controller.startImageStream(_onImage);
-      _gyroSub = gyroscopeEventStream().listen(_onGyro);
+      // Set running BEFORE subscribing to either stream so no early event
+      // from either source can be dropped by the `!_running` guard.
       _running = true;
+      await controller.startImageStream(_onImage);
+      try {
+        _gyroSub = gyroscopeEventStream().listen(
+          _onGyro,
+          onError: (Object err) {
+            if (!mounted) return;
+            setState(() => _error = 'Gyroscope stream error: $err');
+          },
+          cancelOnError: false,
+        );
+      } catch (e) {
+        // Constructing/subscribing to the stream threw synchronously.
+        setState(() => _error = 'Failed to subscribe to gyroscope: $e');
+      }
       _uiTimer = Timer.periodic(
           const Duration(milliseconds: 250), (_) => _refreshUi());
+      // Watchdog: if no gyro callback has fired within 3s of a running camera
+      // stream, the platform channel is not delivering events at all -- most
+      // likely a stale native build (plugin added after last full reinstall;
+      // hot reload/restart does not re-register new native plugins) or the
+      // device has no hardware gyroscope. Surface this explicitly instead of
+      // leaving the user to interpret a silent "0.0".
+      _gyroWatchdog = Timer(const Duration(seconds: 3), () {
+        if (!mounted || !_running) return;
+        if (_gyroCount == 0) {
+          setState(() {
+            _gyroWarning = 'No gyroscope events received after 3s (camera is '
+                'running). Likely cause: the app needs a FULL reinstall '
+                '(uninstall + flutter run / fresh install) after '
+                'sensors_plus was added -- hot reload/restart does not '
+                're-register new native plugins. If a fresh install still '
+                'shows this, the device may lack a hardware gyroscope.';
+          });
+        }
+      });
       setState(() {});
     } on CameraException catch (e) {
       setState(() => _error = 'Camera error: ${e.code}');
@@ -144,6 +183,7 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
     _framesWithSpot = 0;
     _gyroCount = 0;
     _meanGyroFrameOffsetMs = 0;
+    _gyroWarning = null;
     _gx.clear();
     _gy.clear();
     _shiftX.clear();
@@ -158,6 +198,10 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
       _gyroBuffer.removeRange(0, _gyroBuffer.length - _maxGyroBuffer);
     }
     _gyroCount++;
+    if (_gyroWarning != null) {
+      _gyroWatchdog?.cancel();
+      if (mounted) setState(() => _gyroWarning = null);
+    }
   }
 
   void _onImage(CameraImage image) {
@@ -289,6 +333,8 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
     _running = false;
     _uiTimer?.cancel();
     _uiTimer = null;
+    _gyroWatchdog?.cancel();
+    _gyroWatchdog = null;
     await _gyroSub?.cancel();
     _gyroSub = null;
     final c = _controller;
@@ -316,7 +362,7 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
 
   String _summary() =>
       'E2 imu-sync: frames=$_frameCount spot_rate=${(_spotRate * 100).toStringAsFixed(1)}% '
-      'gyro_hz=${_gyroHz.toStringAsFixed(1)} mean_offset=${_meanGyroFrameOffsetMs.toStringAsFixed(1)}ms '
+      'gyro_count=$_gyroCount gyro_hz=${_gyroHz.toStringAsFixed(2)} mean_offset=${_meanGyroFrameOffsetMs.toStringAsFixed(1)}ms '
       'pairs=${_gx.length} '
       'corr_gx_shiftX=${_corr(_gx, _shiftX).toStringAsFixed(2)} '
       'corr_gx_shiftY=${_corr(_gx, _shiftY).toStringAsFixed(2)} '
@@ -353,10 +399,23 @@ class _E2ImuSyncProbeScreenState extends State<E2ImuSyncProbeScreen>
                   ),
                   child: Text(_error!),
                 ),
+              if (_gyroWarning != null)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0x33FFB020),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFFB020)),
+                  ),
+                  child: Text(_gyroWarning!,
+                      style: const TextStyle(fontSize: 13)),
+                ),
               _statRow('Frames', '$_frameCount'),
               _statRow(
                   'Spot detected', '${(_spotRate * 100).toStringAsFixed(1)}%'),
-              _statRow('Gyro rate', '${_gyroHz.toStringAsFixed(1)} Hz'),
+              _statRow('Gyro count (raw)', '$_gyroCount'),
+              _statRow('Gyro rate', '${_gyroHz.toStringAsFixed(2)} Hz'),
               _statRow('Mean gyro↔frame offset',
                   '${_meanGyroFrameOffsetMs.toStringAsFixed(1)} ms'),
               _statRow('Correlation pairs', '${_gx.length}'),
