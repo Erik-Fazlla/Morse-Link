@@ -44,22 +44,27 @@
 
 ---
 
-## E1 Findings (Interim — Phone A only, Phone B pending)
+## E1 Findings (CLOSED — Phone A + Phone B; confound noted)
 
 Raw measurements (V2 Lab → Frame timing probe, wall-clock only):
 
-| FPS | Mean interval | Jitter σ | Max interval | p90 | Est. dropped gaps | Proc. latency avg | Proc. latency max |
-|---|---|---|---|---|---|---|---|
-| 23.16 | 41.4 ms | 19.6 ms | 194 ms | 61 ms | 31 | 0.11 ms | 2.79 ms |
+| Device | Condition | FPS | Mean interval | Jitter σ | Min | Max | p90 | Est. gaps | Lat. avg | Lat. max |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Phone A | dark / low-light | 23.16 | 41.4 ms | 19.6 ms | (not reported) | 194 ms | 61 ms | 31 | 0.11 ms | 2.79 ms |
+| Phone B | daylight | 26.88 | 33.7 ms | 14.6 ms | 3 ms | 133 ms | 50 ms | 69 | 0.16 ms | 2.31 ms |
+
+**⚠ Confounded design:** device and lighting both changed between runs. Phone B's better-looking average stats (higher fps, lower jitter, smaller max) **cannot be attributed to device vs. lighting vs. both** from this data alone. Notably, Phone B is *not* uniformly better: it shows **more** gap events (69 vs 31) and a 3 ms minimum interval (a burst-delivery artifact, not a normal interval) — a pattern a naive "daylight/newer = better" reading would miss. This is consistent with (not proof of) a real lighting mechanism: brighter light → shorter exposure/faster readout → different frame-pacing behavior, not simply "better."
 
 **Analysis:**
-- Processing latency (≤2.79 ms) is negligible next to jitter (σ 19.6 ms, gaps to 194 ms) — the dominant timing error is camera-pipeline frame delivery, not our code. **Wall-clock timestamps remain acceptable** on this basis; a hardware/sensor timestamp isn't exposed by the `camera` plugin's stream API and isn't worth native platform-channel work at this stage. Open Question #1 in the Vision Engine doc stays open but deprioritized.
-- Gap rate ≈2.2% of intervals (~1 stall per ~2 s, assuming a ~60 s run) — frequent enough to be a real design input. Reinforces (does not change) the roadmap's Phase 4 FEC priority; also means Module 8 (Temporal Integration) must be gap-aware when implemented (implementation detail, not a structural change).
-- **No Vision Engine structural change required** — module boundaries and the `Track` contract are unaffected; this data calibrates parameters the Architecture Freeze doc explicitly left open.
-- **U-STD recommendation:** ≈**300 ms** (raw pulse-width floor), derived from 4–5×p90 (244–305 ms) and 1.5–2×max-gap margin (291–388 ms). Supersedes the 120 ms placeholder. Exact bit-period/encoding allocation is an MP1 (PHY) decision built on this floor.
-- **Metric #10 (Min FPS):** measured 23.16 fps vs the ≥24 fps provisional target — essentially at target; treated as E1 supplying the real number rather than a failed gate. Final target locks after Phone B.
+- Processing latency (≤2.79 ms on A, ≤2.31 ms on B) is negligible next to jitter (σ 14.6–19.6 ms, gaps to 133–194 ms) **on both devices independently** — this specific conclusion is *not* confounded (it's a within-device comparison). **Wall-clock timestamps confirmed acceptable** on both. Open Question #1 in the Vision Engine doc is resolved-for-now, deprioritized.
+- Gap rate: A ≈2.2%, B ≈4.3% of intervals (assuming ~60 s runs) — both frequent enough to be a real design input, reinforcing (not changing) the roadmap's Phase 4 FEC priority; Module 8 (Temporal Integration) must be gap-aware when implemented.
+- **No Vision Engine structural change required** — unaffected by either dataset; this is parameter calibration, per the Architecture Freeze doc.
+- **U-STD: kept at ≈300 ms** (unchanged from the Phone A-only interim). Phone A's derivation (4–5×p90=244–305ms, 1.5–2×max=291–388ms → ~300ms) governs because **night is the product's primary regime** (daylight is best-effort only, not a pass criterion) — the harder, dark-condition data should set the design floor. Phone B's derivation (4–5×p90=200–250ms, 1.5–2×max=200–266ms → ~230ms) is *less* demanding — 300ms clears it with margin, corroborating rather than contradicting the choice. **Status: still provisional**, not finalized — see follow-up below.
+- **Metric #10 (Min FPS):** two regime-specific figures, not a device range: ~23.16 fps (dark, the operative target-regime number) and ~26.88 fps (daylight, informational). Design target uses the dark figure.
+- **Follow-up required before MP1 (not before E2):** a **controlled lighting × device study** — same device across both lighting conditions, and/or same lighting across multiple devices — to actually separate the device and lighting variables before U-STD / min-FPS are treated as final rather than provisional.
+- **Process note for future experiments:** don't vary device and condition simultaneously — log/vary one at a time to avoid repeating this confound.
 
-**E1 status: IN PROGRESS.** Roadmap requires ≥2 devices before E1 formally closes and E2 begins (see roadmap E1 entry). Phone B (and any other available test phones) still needed.
+**E1 status: CLOSED.** Roadmap's ≥2-device criterion met. E2 may begin. U-STD (~300ms) and min-FPS remain *provisional* pending the controlled lighting/device follow-up, scheduled before MP1.
 
 ---
 
@@ -164,7 +169,7 @@ Raw measurements (V2 Lab → Frame timing probe, wall-clock only):
 | 7 | Latency | ~seconds (unlogged) | ≤ on-air + ≤1 s (≤5 s M-MED) | send→display ts | within target |
 | 8 | CPU | not instrumented | ≤25% mean D-MID | profiler/top | ≤25%, no jank |
 | 9 | Battery | not instrumented | RX ≤10%/hr D-MID | batterystats | ≤10%/hr RX |
-| 10 | Min FPS | ~30 (unmeasured) | ~23.16 measured Phone A (interim, pending Phone B) | in-app counter | ≥ target sustained |
+| 10 | Min FPS | ~30 (unmeasured) | ~23.16 dark (operative) / ~26.88 daylight (info) — provisional pending confound study | in-app counter | ≥ target sustained |
 | 11 | Thermal | not instrumented | no throttle over 10min RX / 5min TX | thermalservice + fps | no throttle collapse |
 | 12 | Device coverage | dev device(s) | ≥3 devices, ≥1/tier | per-device suite | ≥3 pass metrics 1–6 |
 
@@ -179,3 +184,8 @@ Raw measurements (V2 Lab → Frame timing probe, wall-clock only):
 ## E1 architecture review — Phone A (interim)
 - FPS/jitter/U-STD figures recorded above (§E1 Findings). No Vision Engine structural change. Wall-clock timestamps confirmed acceptable. `U-STD` revised 120 ms → **~300 ms** (interim).
 - **E1 not yet closed** — roadmap requires ≥2 devices; Phone B pending before E2 begins.
+
+## E1 final review — Phone A + Phone B (CLOSED)
+- **E1 closed**: ≥2-device criterion met. Confound (device × lighting both changed) explicitly documented, not resolved — U-STD (~300ms) and min-FPS stay **provisional** pending a controlled lighting/device follow-up study, required before MP1, not before E2.
+- Wall-clock-acceptable conclusion **confirmed on both devices independently** (not confounded — processing latency negligible vs jitter on each device separately).
+- **E2 begins.**
