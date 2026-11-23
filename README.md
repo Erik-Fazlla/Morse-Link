@@ -1,33 +1,60 @@
 # Morse
 
-Morse is an offline Flutter app for emergency optical communication. Phase 1 focuses on converting typed text into Morse and transmitting it through the phone flashlight with accurate timing.
+Talk with light when nothing else works. Morse turns your phone's flashlight
+into a signal lamp — no mobile signal, no internet, no account needed.
 
-## Phase 1 MVP
+## Download
 
-- Text input
-- Morse preview
-- Adjustable timing unit
-- Start and stop transmission
-- Emergency presets: `SOS`, `HELP`, `YES`, `NO`, `OK`
-- Offline-only architecture
+Get the latest Android APK from the
+[Releases page](https://github.com/Erik-Fazlla/Morse-Link/releases/latest).
 
-## Architecture
+To install: download `morse-v1.0.0.apk` on your phone, open it, and allow
+"Install unknown apps" for your browser or file manager when Android asks.
+Needs Android 7.0 or newer and a phone with a flashlight.
 
-The transmission path is intentionally separated:
+## How it works
 
-1. Text input
-2. Morse translation
-3. Timing sequence generation
-4. Flashlight transmission engine
+**Send** — Type a message (or pick SOS, HELP, YES, NO, OK, or a saved
+message). Point the back of your phone at the other person and tap START.
+The flashlight blinks the message in Morse code.
 
-The flashlight layer only reads timing instructions such as:
+- Speed: 300 ms per dot is the default and is easy to read by eye. Go slower
+  for distance, faster for practised readers.
+- Repeat once, a set number of times, or until you stop.
+- Saved messages and recent history are one tap away.
 
-```text
-[ON 200ms, OFF 200ms, ON 600ms]
+**Receive** — Watch the other phone's flashes and tap them in:
+
+- Short flash → **DOT**, long flash → **DASH**
+- Short dark pause → **LETTER** (or turn on *Auto gap* and just wait)
+- Long dark pause → **SPACE**
+
+The app shows the letter you are building and what it could still become,
+then spells out the message. The help button (?) has the full alphabet.
+
+## Tips
+
+- Agree on a speed first. Slow is easier: 300 ms or more.
+- Send the message on repeat so the reader can catch anything they missed.
+- Works best in the dark or in shade.
+
+## Build from source
+
+Requires Flutter 3.x.
+
+```sh
+flutter pub get
+flutter test
+flutter build apk --release
 ```
 
-## Notes
+The APK lands in `build/app/outputs/flutter-apk/app-release.apk`.
 
-- The project files for the Phase 1 Flutter app are included under `lib/`.
-- Because this repository started empty, platform scaffolding may still need to be generated with `flutter create .` on a machine where Flutter can complete setup normally.
-- After scaffolding, run `flutter pub get` and test on a physical Android device with a flashlight.
+## Project notes
+
+- `lib/features/send` — text → Morse → timing sequence → flashlight.
+- `lib/features/receive/manual` — the two-key receive keypad.
+- `lib/features/receive` (camera pipeline) and `lib/v2` — earlier research
+  into decoding flashes with the camera. Kept for reference; not used in the
+  app.
+- `docs/architecture` — design notes and decisions.

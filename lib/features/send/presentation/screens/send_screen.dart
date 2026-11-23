@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:morse/features/history/domain/transmission_history_entry.dart';
 import 'package:morse/features/library/domain/saved_message_template.dart';
+import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/morse_widgets.dart';
 import '../../../../morse/domain/transmission_diagnostics.dart';
 import '../../../../morse/domain/transmission_repeat_mode.dart';
 import '../../../../morse/domain/transmission_state.dart';
@@ -21,10 +23,10 @@ class SendScreen extends StatefulWidget {
 
 class _SendScreenState extends State<SendScreen> {
   static const _presets = ['SOS', 'HELP', 'YES', 'NO', 'OK'];
+  static const double _minUnitMs = 60;
+  static const double _maxUnitMs = 600;
 
   late final TextEditingController _textController;
-  bool _savedMessagesExpanded = true;
-  bool _historyExpanded = true;
 
   SendController get controller => widget.controller;
 
@@ -63,6 +65,113 @@ class _SendScreenState extends State<SendScreen> {
     );
   }
 
+  void _openSavedMessages() {
+    showMorseSheet<void>(
+      context: context,
+      title: 'Saved messages',
+      action: IconButton(
+        tooltip: 'Add saved message',
+        icon: const Icon(Icons.add_rounded),
+        onPressed: controller.hasActiveTransmission
+            ? null
+            : () => _showSavedMessageDialog(),
+      ),
+      builder: (sheetContext, scroll) => AnimatedBuilder(
+        animation: controller,
+        builder: (context, _) {
+          if (controller.isLoadingSavedMessages) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (controller.savedMessages.isEmpty) {
+            return const _EmptySheet(
+              icon: Icons.bookmark_outline_rounded,
+              text: 'No saved messages yet.',
+            );
+          }
+          final enabled = !controller.hasActiveTransmission;
+          return ListView.separated(
+            controller: scroll,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            itemCount: controller.savedMessages.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, i) {
+              final template = controller.savedMessages[i];
+              return _SavedMessageTile(
+                template: template,
+                isSelected: controller.message == template.messageText,
+                enabled: enabled,
+                onToggleFavorite: () =>
+                    controller.toggleSavedMessageFavorite(template),
+                onUse: () {
+                  controller.applySavedMessage(template);
+                  Navigator.of(sheetContext).pop();
+                },
+                onSend: () {
+                  Navigator.of(sheetContext).pop();
+                  controller.sendSavedMessage(template);
+                },
+                onEdit: template.isBuiltIn
+                    ? null
+                    : () => _showSavedMessageDialog(existing: template),
+                onDelete: template.isBuiltIn
+                    ? null
+                    : () => controller.deleteSavedMessage(template),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  void _openHistory() {
+    showMorseSheet<void>(
+      context: context,
+      title: 'Recent',
+      action: IconButton(
+        tooltip: 'Refresh history',
+        icon: const Icon(Icons.refresh_rounded),
+        onPressed: controller.refreshHistory,
+      ),
+      builder: (sheetContext, scroll) => AnimatedBuilder(
+        animation: controller,
+        builder: (context, _) {
+          if (controller.isLoadingHistory) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (controller.recentHistory.isEmpty) {
+            return const _EmptySheet(
+              icon: Icons.history_rounded,
+              text: 'Nothing sent yet.',
+            );
+          }
+          final enabled = !controller.hasActiveTransmission;
+          return ListView.separated(
+            controller: scroll,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            itemCount: controller.recentHistory.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, i) {
+              final entry = controller.recentHistory[i];
+              return _HistoryTile(
+                entry: entry,
+                enabled: enabled,
+                onPopulate: () {
+                  controller.populateFromHistoryEntry(entry);
+                  Navigator.of(sheetContext).pop();
+                },
+                onResend: () {
+                  Navigator.of(sheetContext).pop();
+                  controller.resendHistoryEntry(entry);
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -77,587 +186,145 @@ class _SendScreenState extends State<SendScreen> {
           );
         }
 
+        final busy = controller.hasActiveTransmission;
+
         return Scaffold(
           appBar: AppBar(
             title: const Text('SEND'),
-            centerTitle: true,
             actions: [
               IconButton(
-                onPressed: controller.toggleDebugOverlay,
-                icon: Icon(
-                  controller.debugOverlayEnabled
-                      ? Icons.bug_report
-                      : Icons.bug_report_outlined,
-                ),
-                tooltip: 'Toggle debug overlay',
+                key: const Key('send-open-saved'),
+                onPressed: _openSavedMessages,
+                icon: const Icon(Icons.bookmark_outline_rounded),
+                tooltip: 'Saved messages',
+              ),
+              IconButton(
+                key: const Key('send-open-history'),
+                onPressed: _openHistory,
+                icon: const Icon(Icons.history_rounded),
+                tooltip: 'Recent',
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                color: AppTheme.surfaceRaised,
+                onSelected: (value) {
+                  if (value == 'debug') controller.toggleDebugOverlay();
+                },
+                itemBuilder: (_) => [
+                  CheckedPopupMenuItem(
+                    value: 'debug',
+                    checked: controller.debugOverlayEnabled,
+                    child: const Text('Debug overlay'),
+                  ),
+                ],
               ),
             ],
           ),
+          bottomNavigationBar: _ActionBar(controller: controller),
           body: SafeArea(
+            bottom: false,
             child: Stack(
               children: [
-                SingleChildScrollView(
+                ListView(
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: EdgeInsets.fromLTRB(
-                    20,
-                    20,
-                    20,
-                    20 + MediaQuery.of(context).viewInsets.bottom,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _SectionCard(
-                        child: Column(
-                          children: [
-                            Text(
-                              'Transmission Indicator',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: 18),
-                            ValueListenableBuilder<TransmissionState>(
-                              valueListenable:
-                                  controller.transmissionStateListenable,
-                              builder: (context, transmissionState, _) {
-                                return _TransmissionIndicator(
-                                  transmissionState: transmissionState,
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Wrap(
-                              runSpacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                Text(
-                                  'Message',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleLarge
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                ),
-                                const SizedBox(width: 12),
-                                TextButton.icon(
-                                  onPressed: controller.hasActiveTransmission
-                                      ? null
-                                      : () => _showSavedMessageDialog(),
-                                  icon: const Icon(Icons.bookmark_add_outlined),
-                                  label: const Text('Save Current'),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _textController,
-                              enabled: !controller.hasActiveTransmission,
-                              minLines: 4,
-                              maxLines: 6,
-                              textCapitalization:
-                                  TextCapitalization.characters,
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.6,
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                  children: [
+                    ValueListenableBuilder<TransmissionState>(
+                      valueListenable: controller.transmissionStateListenable,
+                      builder: (context, state, _) =>
+                          _LampPanel(transmissionState: state),
+                    ),
+                    const SizedBox(height: 12),
+                    SectionCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SectionLabel(
+                            'Message',
+                            trailing: TextButton.icon(
+                              onPressed:
+                                  busy ? null : () => _showSavedMessageDialog(),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
                               ),
-                              decoration: const InputDecoration(
-                                hintText: 'Type emergency message',
+                              icon: const Icon(
+                                Icons.bookmark_add_outlined,
+                                size: 18,
                               ),
-                              onChanged: controller.updateMessage,
+                              label: const Text('Save'),
                             ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Flash Speed',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleLarge
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                ),
-                                Text(
-                                  '${controller.unitMs} ms',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(fontWeight: FontWeight.w700),
-                                ),
-                              ],
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            key: const Key('send-message-field'),
+                            controller: _textController,
+                            enabled: !busy,
+                            minLines: 2,
+                            maxLines: 4,
+                            textCapitalization: TextCapitalization.characters,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1,
                             ),
-                            Slider(
-                              value: controller.unitMs.toDouble(),
-                              min: 60,
-                              max: 320,
-                              divisions: 26,
-                              label: '${controller.unitMs} ms',
-                              onChanged: controller.hasActiveTransmission
-                                  ? null
-                                  : controller.updateUnitMs,
+                            decoration: const InputDecoration(
+                              hintText: 'Type a message',
                             ),
-                            Text(
-                              'Base timing unit for dots, dashes, and spacing.',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: const Color(0xFF9D9D9D),
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Repeat Mode',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _RepeatModeChip(
-                                  label: 'Once',
-                                  selected:
-                                      controller.repeatMode ==
-                                          TransmissionRepeatMode.once,
-                                  enabled: !controller.hasActiveTransmission,
-                                  onTap: () => controller.updateRepeatMode(
-                                    TransmissionRepeatMode.once,
-                                  ),
-                                ),
-                                _RepeatModeChip(
-                                  label: 'Repeat Forever',
-                                  selected:
-                                      controller.repeatMode ==
-                                          TransmissionRepeatMode.forever,
-                                  enabled: !controller.hasActiveTransmission,
-                                  onTap: () => controller.updateRepeatMode(
-                                    TransmissionRepeatMode.forever,
-                                  ),
-                                ),
-                                _RepeatModeChip(
-                                  label: 'Custom Count',
-                                  selected:
-                                      controller.repeatMode ==
-                                          TransmissionRepeatMode.customCount,
-                                  enabled: !controller.hasActiveTransmission,
-                                  onTap: () => controller.updateRepeatMode(
-                                    TransmissionRepeatMode.customCount,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (controller.repeatMode ==
-                                TransmissionRepeatMode.customCount) ...[
-                              const SizedBox(height: 16),
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    'Repeat Count',
-                                    style:
-                                        Theme.of(context).textTheme.titleMedium,
-                                  ),
-                                  Text(
-                                    '${controller.customRepeatCount}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                              Slider(
-                                value:
-                                    controller.customRepeatCount.toDouble(),
-                                min: 2,
-                                max: 20,
-                                divisions: 18,
-                                label: '${controller.customRepeatCount}',
-                                onChanged: controller.hasActiveTransmission
-                                    ? null
-                                    : controller.updateCustomRepeatCount,
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Delay Between Repeats',
-                                  style:
-                                      Theme.of(context).textTheme.titleMedium,
-                                ),
-                                Text(
-                                  '${controller.delayBetweenRepeatsMs} ms',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(fontWeight: FontWeight.w700),
-                                ),
-                              ],
-                            ),
-                            Slider(
-                              value: controller.delayBetweenRepeatsMs
-                                  .toDouble(),
-                              min: 0,
-                              max: 5000,
-                              divisions: 25,
-                              label:
-                                  '${controller.delayBetweenRepeatsMs} ms',
-                              onChanged: controller.hasActiveTransmission
-                                  ? null
-                                  : controller.updateDelayBetweenRepeatsMs,
-                            ),
-                            Text(
-                              'Applies after each full message while keeping Morse symbol timing exact.',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: const Color(0xFF9D9D9D),
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Emergency Presets',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
+                            onChanged: controller.updateMessage,
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 40,
+                            child: ListView(
+                              scrollDirection: Axis.horizontal,
                               children: [
                                 for (final preset in _presets)
-                                  ChoiceChip(
-                                    label: Text(preset),
-                                    selected: controller.message == preset,
-                                    onSelected:
-                                        controller.hasActiveTransmission
-                                            ? null
-                                            : (_) => controller.applyPreset(
-                                                  preset,
-                                                ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: ChoiceChip(
+                                      label: Text(preset),
+                                      selected: controller.message == preset,
+                                      onSelected: busy
+                                          ? null
+                                          : (_) =>
+                                              controller.applyPreset(preset),
+                                    ),
                                   ),
                               ],
                             ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _CollapsibleHeader(
-                              title: 'Saved Messages',
-                              subtitle: 'Quick populate or send emergency templates',
-                              expanded: _savedMessagesExpanded,
-                              trailing: IconButton(
-                                onPressed: controller.hasActiveTransmission
-                                    ? null
-                                    : () => _showSavedMessageDialog(),
-                                icon: const Icon(Icons.add_circle_outline),
-                                tooltip: 'Add custom saved message',
-                              ),
-                              onTap: () {
-                                setState(() {
-                                  _savedMessagesExpanded =
-                                      !_savedMessagesExpanded;
-                                });
-                              },
-                            ),
-                            if (_savedMessagesExpanded) ...[
-                              const SizedBox(height: 12),
-                              if (controller.isLoadingSavedMessages)
-                                const Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 12),
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                )
-                              else if (controller.savedMessages.isEmpty)
-                                Text(
-                                  'No saved messages available.',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.copyWith(
-                                        color: const Color(0xFF9D9D9D),
-                                      ),
-                                )
-                              else
-                                Column(
-                                  children: [
-                                    for (final template
-                                        in controller.savedMessages)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 10,
-                                        ),
-                                        child: _SavedMessageCard(
-                                          template: template,
-                                          isSelected: controller.message ==
-                                              template.messageText,
-                                          enabled:
-                                              !controller.hasActiveTransmission,
-                                          onToggleFavorite: () => controller
-                                              .toggleSavedMessageFavorite(
-                                                template,
-                                              ),
-                                          onUse: () => controller
-                                              .applySavedMessage(template),
-                                          onSend: () => controller
-                                              .sendSavedMessage(template),
-                                          onEdit: template.isBuiltIn
-                                              ? null
-                                              : () => _showSavedMessageDialog(
-                                                    existing: template,
-                                                  ),
-                                          onDelete: template.isBuiltIn
-                                              ? null
-                                              : () => controller
-                                                  .deleteSavedMessage(template),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _CollapsibleHeader(
-                              title: 'Recent History',
-                              subtitle: 'Last 10 successful transmissions',
-                              expanded: _historyExpanded,
-                              trailing: IconButton(
-                                onPressed: controller.refreshHistory,
-                                icon: const Icon(Icons.refresh),
-                                tooltip: 'Refresh history',
-                              ),
-                              onTap: () {
-                                setState(() {
-                                  _historyExpanded = !_historyExpanded;
-                                });
-                              },
-                            ),
-                            if (_historyExpanded) ...[
-                              const SizedBox(height: 12),
-                              if (controller.isLoadingHistory)
-                                const Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 12),
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                )
-                              else if (controller.recentHistory.isEmpty)
-                                Text(
-                                  'No recent transmissions yet.',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.copyWith(
-                                        color: const Color(0xFF9D9D9D),
-                                      ),
-                                )
-                              else
-                                Column(
-                                  children: [
-                                    for (final entry in controller.recentHistory)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 10,
-                                        ),
-                                        child: _HistoryCard(
-                                          entry: entry,
-                                          enabled:
-                                              !controller.hasActiveTransmission,
-                                          onPopulate: () => controller
-                                              .populateFromHistoryEntry(entry),
-                                          onResend: () => controller
-                                              .resendHistoryEntry(entry),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Morse Preview',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: 12),
-                            SelectableText(
-                              controller.translation.morsePreview.isEmpty
-                                  ? 'No transmittable Morse yet.'
-                                  : controller.translation.morsePreview,
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.1,
-                              ),
-                            ),
-                            if (controller.translation.unsupportedCharacters
-                                .isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'Ignored unsupported characters: ${controller.translation.unsupportedCharacters.join(', ')}',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      color: const Color(0xFFFFC857),
-                                    ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton(
-                              onPressed: controller.transmissionState.canStart
-                                  ? controller.startTransmission
-                                  : null,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFFFF5A36),
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 18),
-                                textStyle: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.0,
-                                ),
-                              ),
-                              child: const Text('START'),
-                            ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: controller.transmissionState.canStop
-                                  ? controller.stopTransmission
-                                  : null,
-                              style: OutlinedButton.styleFrom(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 18),
-                                side: const BorderSide(
-                                  color: Color(0xFFFFC857),
-                                  width: 1.4,
-                                ),
-                                textStyle: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.0,
-                                ),
-                              ),
-                              child: const Text('STOP'),
-                            ),
-                          ),
+                          const SizedBox(height: 14),
+                          _MorsePreview(controller: controller),
                         ],
                       ),
-                      if (controller.statusMessage != null) ...[
-                        const SizedBox(height: 16),
-                        Text(
-                          controller.statusMessage!,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodyLarge
-                              ?.copyWith(
-                                color: controller.hasActiveTransmission
-                                    ? const Color(0xFFFFC857)
-                                    : const Color(0xFFD7D7D7),
-                                fontWeight: FontWeight.w600,
-                              ),
+                    ),
+                    const SizedBox(height: 12),
+                    _QuickRow(
+                      savedCount: controller.savedMessages.length,
+                      historyCount: controller.recentHistory.length,
+                      onSaved: _openSavedMessages,
+                      onHistory: _openHistory,
+                    ),
+                    const SizedBox(height: 12),
+                    _TimingPanel(
+                      controller: controller,
+                      minUnitMs: _minUnitMs,
+                      maxUnitMs: _maxUnitMs,
+                    ),
+                    if (controller.statusMessage != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        controller.statusMessage!,
+                        style: TextStyle(
+                          color: busy
+                              ? AppTheme.highlight
+                              : AppTheme.textSecondary,
+                          fontWeight: FontWeight.w600,
                         ),
-                      ],
-                      if (controller.hasActiveTransmission) ...[
-                        const SizedBox(height: 10),
-                        ValueListenableBuilder<TransmissionState>(
-                          valueListenable:
-                              controller.transmissionStateListenable,
-                          builder: (context, transmissionState, _) {
-                            final total = transmissionState.totalRepeats;
-                            final label = total == null
-                                ? 'Repeat ${transmissionState.currentRepeat} / forever'
-                                : 'Repeat ${transmissionState.currentRepeat} / $total';
-
-                            return Text(
-                              transmissionState.isWaitingBetweenRepeats
-                                  ? '$label - standby'
-                                  : label,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: const Color(0xFFFFC857),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                            );
-                          },
-                        ),
-                      ],
+                      ),
                     ],
-                  ),
+                  ],
                 ),
                 if (controller.debugOverlayEnabled)
                   Positioned(
@@ -678,6 +345,757 @@ class _SendScreenState extends State<SendScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Compact lamp that mirrors the flashlight, with live status.
+class _LampPanel extends StatelessWidget {
+  const _LampPanel({required this.transmissionState});
+
+  final TransmissionState transmissionState;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = transmissionState.isLightOn;
+    final active = transmissionState.isActive;
+    final total = transmissionState.totalRepeats;
+    final repeatLabel = !active
+        ? null
+        : total == null
+            ? 'Round ${transmissionState.currentRepeat} · repeating'
+            : 'Round ${transmissionState.currentRepeat} of $total';
+
+    return SectionCard(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 76,
+            height: 76,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: on
+                    ? const [
+                        AppTheme.lamp,
+                        Color(0xFFFFB347),
+                        Color(0xFF3A2405)
+                      ]
+                    : const [
+                        Color(0xFF1C1F23),
+                        Color(0xFF121417),
+                        AppTheme.surface
+                      ],
+                stops: const [0.2, 0.6, 1],
+              ),
+              border: Border.all(
+                color: active ? AppTheme.emergency : AppTheme.border,
+                width: on ? 3 : 1.5,
+              ),
+              boxShadow: [
+                if (on)
+                  BoxShadow(
+                    color: AppTheme.highlight.withValues(alpha: 0.55),
+                    blurRadius: 30,
+                    spreadRadius: 6,
+                  ),
+              ],
+            ),
+            child: Icon(
+              Icons.flashlight_on_rounded,
+              size: 30,
+              color: on ? const Color(0xFF2A1600) : AppTheme.textMuted,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _title(),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1,
+                    color: active ? AppTheme.highlight : AppTheme.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  repeatLabel ??
+                      (transmissionState.status == TransmissionStatus.error
+                          ? 'Check flashlight permission and try again.'
+                          : 'Point the back of your phone at the receiver.'),
+                  style: const TextStyle(
+                    color: AppTheme.textMuted,
+                    height: 1.35,
+                  ),
+                ),
+                if (transmissionState.isWaitingBetweenRepeats)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Pause before next round',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _title() {
+    switch (transmissionState.status) {
+      case TransmissionStatus.idle:
+        return 'Ready';
+      case TransmissionStatus.transmitting:
+        return 'Transmitting';
+      case TransmissionStatus.paused:
+        return 'Paused';
+      case TransmissionStatus.stopped:
+        return 'Stopped';
+      case TransmissionStatus.error:
+        return 'Flashlight error';
+    }
+  }
+}
+
+class _MorsePreview extends StatelessWidget {
+  const _MorsePreview({required this.controller});
+
+  final SendController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final translation = controller.translation;
+    final preview = translation.morsePreview;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        borderRadius: BorderRadius.circular(AppTheme.radiusM),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('Morse'),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 96),
+            child: SingleChildScrollView(
+              child: preview.isEmpty
+                  ? const Text(
+                      'Nothing to send yet.',
+                      style: TextStyle(color: AppTheme.textMuted),
+                    )
+                  : Semantics(
+                      label: preview,
+                      child: Wrap(
+                        spacing: 14,
+                        runSpacing: 10,
+                        children: [
+                          for (final word in translation.words)
+                            if (word.letters.isNotEmpty)
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 10,
+                                children: [
+                                  for (final letter in word.letters)
+                                    Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        MorseGlyphs(letter.symbols, unit: 6),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          letter.character,
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w800,
+                                            color: AppTheme.textMuted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                ],
+                              ),
+                        ],
+                      ),
+                    ),
+            ),
+          ),
+          if (translation.unsupportedCharacters.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Skipped: ${translation.unsupportedCharacters.join(' ')}',
+              style: const TextStyle(color: AppTheme.emergency, fontSize: 13),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Saved + recent stay as two small buttons; their lists open in sheets.
+class _QuickRow extends StatelessWidget {
+  const _QuickRow({
+    required this.savedCount,
+    required this.historyCount,
+    required this.onSaved,
+    required this.onHistory,
+  });
+
+  final int savedCount;
+  final int historyCount;
+  final VoidCallback onSaved;
+  final VoidCallback onHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _QuickButton(
+            key: const Key('send-saved-tile'),
+            icon: Icons.bookmark_outline_rounded,
+            label: 'Saved',
+            count: savedCount,
+            onTap: onSaved,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _QuickButton(
+            key: const Key('send-history-tile'),
+            icon: Icons.history_rounded,
+            label: 'Recent',
+            count: historyCount,
+            onTap: onHistory,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuickButton extends StatelessWidget {
+  const _QuickButton({
+    required this.icon,
+    required this.label,
+    required this.count,
+    required this.onTap,
+    super.key,
+  });
+
+  final IconData icon;
+  final String label;
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(AppTheme.radiusM);
+    return Material(
+      color: AppTheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: radius,
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: radius,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: AppTheme.highlight),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (count > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceMuted,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.expand_less_rounded,
+                size: 20,
+                color: AppTheme.textMuted,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Speed + repeat settings, folded away by default.
+class _TimingPanel extends StatelessWidget {
+  const _TimingPanel({
+    required this.controller,
+    required this.minUnitMs,
+    required this.maxUnitMs,
+  });
+
+  final SendController controller;
+  final double minUnitMs;
+  final double maxUnitMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = controller.hasActiveTransmission;
+    final repeatSummary = switch (controller.repeatMode) {
+      TransmissionRepeatMode.once => 'once',
+      TransmissionRepeatMode.forever => 'repeat forever',
+      TransmissionRepeatMode.customCount => '×${controller.customRepeatCount}',
+    };
+
+    return Material(
+      color: AppTheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radiusL),
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: const Key('send-timing'),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 18),
+          childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+          iconColor: AppTheme.textSecondary,
+          collapsedIconColor: AppTheme.textMuted,
+          leading: const Icon(Icons.tune_rounded, color: AppTheme.highlight),
+          title: const Text(
+            'Speed & repeat',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Text(
+            '${controller.unitMs} ms · $repeatSummary',
+            style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+          ),
+          children: [
+            _SliderRow(
+              label: 'Flash speed',
+              value: '${controller.unitMs} ms',
+              hint: _speedHint(controller.unitMs),
+              slider: Slider(
+                value: controller.unitMs.toDouble().clamp(minUnitMs, maxUnitMs),
+                min: minUnitMs,
+                max: maxUnitMs,
+                divisions: ((maxUnitMs - minUnitMs) / 20).round(),
+                label: '${controller.unitMs} ms',
+                onChanged: busy ? null : controller.updateUnitMs,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final mode in TransmissionRepeatMode.values)
+                    ChoiceChip(
+                      label: Text(switch (mode) {
+                        TransmissionRepeatMode.once => 'Once',
+                        TransmissionRepeatMode.forever => 'Forever',
+                        TransmissionRepeatMode.customCount => 'Count',
+                      }),
+                      selected: controller.repeatMode == mode,
+                      onSelected: busy
+                          ? null
+                          : (_) => controller.updateRepeatMode(mode),
+                    ),
+                ],
+              ),
+            ),
+            if (controller.repeatMode ==
+                TransmissionRepeatMode.customCount) ...[
+              const SizedBox(height: 8),
+              _SliderRow(
+                label: 'Rounds',
+                value: '${controller.customRepeatCount}',
+                slider: Slider(
+                  value: controller.customRepeatCount.toDouble().clamp(2, 20),
+                  min: 2,
+                  max: 20,
+                  divisions: 18,
+                  label: '${controller.customRepeatCount}',
+                  onChanged: busy ? null : controller.updateCustomRepeatCount,
+                ),
+              ),
+            ],
+            if (controller.repeatMode != TransmissionRepeatMode.once) ...[
+              const SizedBox(height: 8),
+              _SliderRow(
+                label: 'Pause between rounds',
+                value: '${controller.delayBetweenRepeatsMs} ms',
+                slider: Slider(
+                  value: controller.delayBetweenRepeatsMs
+                      .toDouble()
+                      .clamp(0, 5000),
+                  min: 0,
+                  max: 5000,
+                  divisions: 25,
+                  label: '${controller.delayBetweenRepeatsMs} ms',
+                  onChanged:
+                      busy ? null : controller.updateDelayBetweenRepeatsMs,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _speedHint(int unitMs) {
+    if (unitMs >= 300) return 'Easy to read by eye.';
+    if (unitMs >= 180) return 'Medium — for practised readers.';
+    return 'Fast — hard to read by eye.';
+  }
+}
+
+class _SliderRow extends StatelessWidget {
+  const _SliderRow({
+    required this.label,
+    required this.value,
+    required this.slider,
+    this.hint,
+  });
+
+  final String label;
+  final String value;
+  final String? hint;
+  final Widget slider;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(color: AppTheme.textSecondary),
+              ),
+            ),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
+          ],
+        ),
+        slider,
+        if (hint != null)
+          Text(
+            hint!,
+            style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+          ),
+      ],
+    );
+  }
+}
+
+/// START / STOP pinned to the bottom, above the system navigation.
+class _ActionBar extends StatelessWidget {
+  const _ActionBar({required this.controller});
+
+  final SendController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = controller.transmissionState;
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppTheme.background,
+        border: Border(top: BorderSide(color: AppTheme.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: state.canStop
+              ? SizedBox(
+                  height: 58,
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    key: const Key('send-stop'),
+                    onPressed: controller.stopTransmission,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.highlight,
+                      side: const BorderSide(
+                        color: AppTheme.highlight,
+                        width: 1.6,
+                      ),
+                      textStyle: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                    icon: const Icon(Icons.stop_rounded),
+                    label: const Text('STOP'),
+                  ),
+                )
+              : SizedBox(
+                  height: 58,
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    key: const Key('send-start'),
+                    onPressed:
+                        state.canStart ? controller.startTransmission : null,
+                    style: FilledButton.styleFrom(
+                      textStyle: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                    icon: const Icon(Icons.flashlight_on_rounded),
+                    label: const Text('START'),
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptySheet extends StatelessWidget {
+  const _EmptySheet({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 36, color: AppTheme.textMuted),
+          const SizedBox(height: 10),
+          Text(text, style: const TextStyle(color: AppTheme.textMuted)),
+        ],
+      ),
+    );
+  }
+}
+
+class _SavedMessageTile extends StatelessWidget {
+  const _SavedMessageTile({
+    required this.template,
+    required this.isSelected,
+    required this.enabled,
+    required this.onToggleFavorite,
+    required this.onUse,
+    required this.onSend,
+    this.onEdit,
+    this.onDelete,
+  });
+
+  final SavedMessageTemplate template;
+  final bool isSelected;
+  final bool enabled;
+  final VoidCallback onToggleFavorite;
+  final VoidCallback onUse;
+  final VoidCallback onSend;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceRaised,
+        borderRadius: BorderRadius.circular(AppTheme.radiusM),
+        border: Border.all(
+          color: isSelected ? AppTheme.emergency : AppTheme.border,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: enabled ? onUse : null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      if (template.isFavorite)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 6),
+                          child: Icon(
+                            Icons.star_rounded,
+                            size: 16,
+                            color: AppTheme.highlight,
+                          ),
+                        ),
+                      Flexible(
+                        child: Text(
+                          template.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    template.messageText,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: AppTheme.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Send now',
+            onPressed: enabled ? onSend : null,
+            icon: const Icon(
+              Icons.flashlight_on_rounded,
+              color: AppTheme.emergency,
+            ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            color: AppTheme.surfaceMuted,
+            enabled: enabled,
+            onSelected: (v) {
+              switch (v) {
+                case 'use':
+                  onUse();
+                case 'fav':
+                  onToggleFavorite();
+                case 'edit':
+                  onEdit?.call();
+                case 'delete':
+                  onDelete?.call();
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'use', child: Text('Use')),
+              PopupMenuItem(
+                value: 'fav',
+                child: Text(template.isFavorite ? 'Unfavorite' : 'Favorite'),
+              ),
+              if (onEdit != null)
+                const PopupMenuItem(value: 'edit', child: Text('Edit')),
+              if (onDelete != null)
+                const PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryTile extends StatelessWidget {
+  const _HistoryTile({
+    required this.entry,
+    required this.enabled,
+    required this.onPopulate,
+    required this.onResend,
+  });
+
+  final TransmissionHistoryEntry entry;
+  final bool enabled;
+  final VoidCallback onPopulate;
+  final VoidCallback onResend;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = entry.timestamp.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final when =
+        '${two(t.day)}/${two(t.month)} ${two(t.hour)}:${two(t.minute)}';
+    final repeat = switch (entry.repeatMode) {
+      'customCount' => '×${entry.repeatCount}',
+      'forever' => 'forever',
+      _ => 'once',
+    };
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceRaised,
+        borderRadius: BorderRadius.circular(AppTheme.radiusM),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: enabled ? onPopulate : null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry.messageText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$when · ${entry.timingUnitMs} ms · $repeat',
+                    style: const TextStyle(
+                      color: AppTheme.textMuted,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Use',
+            onPressed: enabled ? onPopulate : null,
+            icon: const Icon(Icons.edit_note_rounded),
+          ),
+          IconButton(
+            tooltip: 'Send again',
+            onPressed: enabled ? onResend : null,
+            icon: const Icon(
+              Icons.replay_rounded,
+              color: AppTheme.emergency,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -768,9 +1186,8 @@ class _SavedMessageEditorDialogState extends State<_SavedMessageEditorDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       scrollable: true,
-      backgroundColor: const Color(0xFF111111),
       title: Text(
-        widget.existing == null ? 'Save Custom Message' : 'Edit Saved Message',
+        widget.existing == null ? 'Save message' : 'Edit saved message',
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -796,10 +1213,10 @@ class _SavedMessageEditorDialogState extends State<_SavedMessageEditorDialog> {
             const SizedBox(height: 12),
             Text(
               _errorText!,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFFFF8A6B),
-                    fontWeight: FontWeight.w600,
-                  ),
+              style: const TextStyle(
+                color: AppTheme.emergency,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ],
         ],
@@ -811,514 +1228,10 @@ class _SavedMessageEditorDialogState extends State<_SavedMessageEditorDialog> {
         ),
         FilledButton(
           onPressed: _isSaving ? null : _handleSave,
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFFFF5A36),
-            foregroundColor: Colors.white,
-          ),
-          child: Text(_isSaving ? 'SAVING...' : 'SAVE'),
+          child: Text(_isSaving ? 'SAVING…' : 'SAVE'),
         ),
       ],
     );
-  }
-}
-
-class _CollapsibleHeader extends StatelessWidget {
-  const _CollapsibleHeader({
-    required this.title,
-    required this.subtitle,
-    required this.expanded,
-    required this.onTap,
-    this.trailing,
-  });
-
-  final String title;
-  final String subtitle;
-  final bool expanded;
-  final VoidCallback onTap;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: const Color(0xFF9D9D9D),
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            if (trailing != null) trailing!,
-            Icon(
-              expanded ? Icons.expand_less : Icons.expand_more,
-              color: const Color(0xFFD7D7D7),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SavedMessageCard extends StatelessWidget {
-  const _SavedMessageCard({
-    required this.template,
-    required this.isSelected,
-    required this.enabled,
-    required this.onToggleFavorite,
-    required this.onUse,
-    required this.onSend,
-    this.onEdit,
-    this.onDelete,
-  });
-
-  final SavedMessageTemplate template;
-  final bool isSelected;
-  final bool enabled;
-  final VoidCallback onToggleFavorite;
-  final VoidCallback onUse;
-  final VoidCallback onSend;
-  final VoidCallback? onEdit;
-  final VoidCallback? onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D0D0D),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isSelected
-              ? const Color(0xFFFF5A36)
-              : template.isFavorite
-                  ? const Color(0xFFFFC857)
-                  : const Color(0xFF262626),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  template.title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              IconButton(
-                onPressed: onToggleFavorite,
-                icon: Icon(
-                  template.isFavorite ? Icons.star : Icons.star_border,
-                  color: const Color(0xFFFFC857),
-                ),
-                tooltip: 'Favorite',
-              ),
-              if (onEdit != null)
-                IconButton(
-                  onPressed: enabled ? onEdit : null,
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Edit',
-                ),
-              if (onDelete != null)
-                IconButton(
-                  onPressed: enabled ? onDelete : null,
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Delete',
-                ),
-            ],
-          ),
-          Text(
-            template.messageText,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: const Color(0xFFD7D7D7),
-                ),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final shouldStack = constraints.maxWidth < 320;
-              if (shouldStack) {
-                return Column(
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: enabled ? onUse : null,
-                        child: const Text('USE'),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: enabled ? onSend : null,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF5A36),
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('SEND'),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              return Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: enabled ? onUse : null,
-                      child: const Text('USE'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: enabled ? onSend : null,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF5A36),
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text('SEND'),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HistoryCard extends StatelessWidget {
-  const _HistoryCard({
-    required this.entry,
-    required this.enabled,
-    required this.onPopulate,
-    required this.onResend,
-  });
-
-  final TransmissionHistoryEntry entry;
-  final bool enabled;
-  final VoidCallback onPopulate;
-  final VoidCallback onResend;
-
-  @override
-  Widget build(BuildContext context) {
-    final timestamp = entry.timestamp.toLocal();
-    final month = timestamp.month.toString().padLeft(2, '0');
-    final day = timestamp.day.toString().padLeft(2, '0');
-    final hour = timestamp.hour.toString().padLeft(2, '0');
-    final minute = timestamp.minute.toString().padLeft(2, '0');
-    final repeatLabel = entry.repeatMode == 'customCount'
-        ? 'custom x${entry.repeatCount}'
-        : entry.repeatMode;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D0D0D),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF262626)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            entry.messageText,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${timestamp.year}-$month-$day $hour:$minute',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: const Color(0xFF9D9D9D),
-                ),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              _HistoryMetaChip(label: 'Unit ${entry.timingUnitMs} ms'),
-              _HistoryMetaChip(label: 'Repeat $repeatLabel'),
-              _HistoryMetaChip(
-                label: 'Delay ${entry.delayBetweenRepeatsMs} ms',
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final shouldStack = constraints.maxWidth < 340;
-              if (shouldStack) {
-                return Column(
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: enabled ? onPopulate : null,
-                        child: const Text('POPULATE'),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: enabled ? onResend : null,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF5A36),
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('RESEND'),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              return Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: enabled ? onPopulate : null,
-                      child: const Text('POPULATE'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: enabled ? onResend : null,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF5A36),
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text('RESEND'),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HistoryMetaChip extends StatelessWidget {
-  const _HistoryMetaChip({
-    required this.label,
-  });
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141414),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF2D2D2D)),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: const Color(0xFFD7D7D7),
-            ),
-      ),
-    );
-  }
-}
-
-class _RepeatModeChip extends StatelessWidget {
-  const _RepeatModeChip({
-    required this.label,
-    required this.selected,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ChoiceChip(
-      label: Text(label),
-      selected: selected,
-      onSelected: enabled ? (_) => onTap() : null,
-    );
-  }
-}
-
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.child,
-  });
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF262626)),
-      ),
-      child: child,
-    );
-  }
-}
-
-class _TransmissionIndicator extends StatelessWidget {
-  const _TransmissionIndicator({
-    required this.transmissionState,
-  });
-
-  final TransmissionState transmissionState;
-
-  @override
-  Widget build(BuildContext context) {
-    final isTransmitting = transmissionState.isActive;
-    final isLightOn = transmissionState.isLightOn;
-    final glowColor =
-        isLightOn ? const Color(0xFFFFC857) : const Color(0xFF2A2A2A);
-    final coreColor =
-        isLightOn ? const Color(0xFFFFF0B3) : const Color(0xFF090909);
-    final ringColor =
-        isTransmitting ? const Color(0xFFFF5A36) : const Color(0xFF383838);
-
-    return Column(
-      children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          curve: Curves.easeInOut,
-          width: 180,
-          height: 180,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(
-              colors: [
-                coreColor,
-                isLightOn ? const Color(0xFFFFB347) : const Color(0xFF121212),
-                const Color(0xFF050505),
-              ],
-              stops: const [0.18, 0.52, 1],
-            ),
-            border: Border.all(
-              color: ringColor,
-              width: isLightOn ? 4 : 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: glowColor.withOpacity(isLightOn ? 0.55 : 0.08),
-                blurRadius: isLightOn ? 36 : 10,
-                spreadRadius: isLightOn ? 10 : 1,
-              ),
-              BoxShadow(
-                color: const Color(0xFFFF5A36)
-                    .withOpacity(isTransmitting ? 0.18 : 0.0),
-                blurRadius: 18,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: Center(
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 140),
-              opacity: isLightOn ? 1 : 0.45,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.flashlight_on_rounded,
-                    color: isLightOn
-                        ? const Color(0xFF2A1600)
-                        : const Color(0xFF6A6A6A),
-                    size: 42,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    isLightOn ? 'ON' : 'OFF',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 2,
-                          color: isLightOn
-                              ? const Color(0xFF2A1600)
-                              : const Color(0xFFB8B8B8),
-                        ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Text(
-          _statusLabel(),
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: isLightOn
-                    ? const Color(0xFFFFC857)
-                    : const Color(0xFF9D9D9D),
-                fontWeight: FontWeight.w600,
-              ),
-        ),
-      ],
-    );
-  }
-
-  String _statusLabel() {
-    switch (transmissionState.status) {
-      case TransmissionStatus.idle:
-        return 'Waiting for transmission';
-      case TransmissionStatus.transmitting:
-        return 'Synchronized to live timing engine';
-      case TransmissionStatus.paused:
-        return 'Transmission paused';
-      case TransmissionStatus.stopped:
-        return 'Transmission stopped';
-      case TransmissionStatus.error:
-        return 'Transmission error';
-    }
   }
 }
 
@@ -1346,25 +1259,18 @@ class _DebugOverlay extends StatelessWidget {
             color: const Color(0xDD0A0A0A),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFF3A3A3A)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.28),
-                blurRadius: 14,
-                spreadRadius: 2,
-              ),
-            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
+              const Text(
                 'DEBUG',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: const Color(0xFFFFC857),
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.4,
-                    ),
+                style: TextStyle(
+                  color: AppTheme.highlight,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.4,
+                ),
               ),
               const SizedBox(height: 8),
               _DebugRow(label: 'State', value: diagnostics.status.name),
@@ -1425,7 +1331,7 @@ class _DebugRow extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(color: Color(0xFF9D9D9D)),
+            style: const TextStyle(color: AppTheme.textMuted),
           ),
           const SizedBox(width: 12),
           Flexible(

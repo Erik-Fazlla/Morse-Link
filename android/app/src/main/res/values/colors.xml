@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches AppTheme.background so no white flashes or bars show
+         behind the Flutter UI (splash, nav bar, keyboard resize). -->
+    <color name="morse_background">#07080A</color>
+</resources>
