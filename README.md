@@ -8,7 +8,7 @@ into a signal lamp — no mobile signal, no internet, no account needed.
 Get the latest Android APK from the
 [Releases page](https://github.com/Erik-Fazlla/Morse-Link/releases/latest).
 
-To install: download `morse-v1.0.0.apk` on your phone, open it, and allow
+To install: download the `.apk` file on your phone, open it, and allow
 "Install unknown apps" for your browser or file manager when Android asks.
 Needs Android 7.0 or newer and a phone with a flashlight.
 
@@ -49,6 +49,11 @@ flutter build apk --release
 ```
 
 The APK lands in `build/app/outputs/flutter-apk/app-release.apk`.
+
+Official releases are signed with the project's release key, which is not in
+this repository. A build from source is signed with your local debug key
+instead, so it installs as a separate copy and can't update an official
+install.
 
 ## Project notes
 

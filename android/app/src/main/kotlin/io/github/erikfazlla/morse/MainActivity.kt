@@ -1,4 +1,4 @@
-package com.example.morse
+package io.github.erikfazlla.morse
 
 import io.flutter.embedding.android.FlutterActivity
 
